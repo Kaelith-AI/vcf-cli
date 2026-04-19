@@ -4,6 +4,21 @@ All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
+## [Unreleased]
+
+### Added
+
+- **Codex CLI skill pack** (15 skills) + `vcf install-skills codex` —
+  installs into `~/.agents/skills/` (Codex's user-scope skills location per
+  [developers.openai.com/codex/skills](https://developers.openai.com/codex/skills)).
+  Same SKILL.md format as the Claude Code pack (open agent-skills standard);
+  only the invocation hint differs (`$capture-idea` vs `/capture-idea`).
+
+### Changed
+
+- `vcf install-skills` now accepts `codex` in addition to `claude-code`;
+  unknown clients exit with a supported-list error.
+
 ## [0.0.1-alpha.0] — 2026-04-19
 
 Initial alpha. All 13 milestones of the VCF-MCP MVP plan landed.

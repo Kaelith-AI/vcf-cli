@@ -34,10 +34,11 @@ This:
 - creates `~/.vcf/vcf.db` on first tool call
 
 ```bash
-vcf install-skills claude-code
+vcf install-skills claude-code   # → ~/.claude/skills/
+vcf install-skills codex         # → ~/.agents/skills/ (also read by project-scope .agents/skills/)
 ```
 
-Copies the 15-skill pack into `~/.claude/skills/`.
+Copies the 15-skill pack into the client's skills directory. Re-running is idempotent — existing skill dirs are skipped so your edits aren't clobbered.
 
 ## Lifecycle walk-through
 

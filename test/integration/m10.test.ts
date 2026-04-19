@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -157,5 +157,63 @@ describe("M10 vcf CLI", () => {
     expect(res.status).toBe(0);
     // Empty audit DB prints []\n
     expect(res.stderr.trim()).toBe("[]");
+  });
+
+  it("vcf install-skills claude-code copies 15 skills with Claude /foo invocation", async () => {
+    const dest = join(workRoot, "claude-skills");
+    const res = runCli(["install-skills", "claude-code", "--dest", dest]);
+    expect(res.status).toBe(0);
+    expect(res.stderr).toMatch(/install-skills: 15 installed, 0 skipped/);
+    const dirs = await readdir(dest);
+    expect(dirs.sort()).toEqual(
+      [
+        "accept-plan",
+        "build",
+        "build-swap",
+        "capture-idea",
+        "initialize-project",
+        "log-decision",
+        "log-response",
+        "plan",
+        "reindex",
+        "review",
+        "ship-audit",
+        "ship-build",
+        "spec-idea",
+        "status",
+        "test",
+      ].sort(),
+    );
+    const body = await readFile(join(dest, "capture-idea", "SKILL.md"), "utf8");
+    expect(body).toMatch(/\/capture-idea/);
+    expect(body).not.toMatch(/\$capture-idea/);
+  });
+
+  it("vcf install-skills codex copies 15 skills with Codex $foo invocation", async () => {
+    const dest = join(workRoot, "codex-skills");
+    const res = runCli(["install-skills", "codex", "--dest", dest]);
+    expect(res.status).toBe(0);
+    expect(res.stderr).toMatch(/install-skills: 15 installed, 0 skipped/);
+    const dirs = await readdir(dest);
+    expect(dirs).toHaveLength(15);
+    const body = await readFile(join(dest, "capture-idea", "SKILL.md"), "utf8");
+    expect(body).toMatch(/\$capture-idea/);
+    expect(body).not.toMatch(/\/capture-idea/);
+  });
+
+  it("vcf install-skills skips when skill dir already exists", async () => {
+    const dest = join(workRoot, "codex-skills-reinstall");
+    const first = runCli(["install-skills", "codex", "--dest", dest]);
+    expect(first.status).toBe(0);
+    const second = runCli(["install-skills", "codex", "--dest", dest]);
+    expect(second.status).toBe(0);
+    expect(second.stderr).toMatch(/install-skills: 0 installed, 15 skipped/);
+  });
+
+  it("vcf install-skills rejects unknown clients with exit code 2", () => {
+    const res = runCli(["install-skills", "gemini"]);
+    expect(res.status).toBe(2);
+    expect(res.stderr).toMatch(/unknown client 'gemini'/);
+    expect(res.stderr).toMatch(/supported: claude-code, codex/);
   });
 });

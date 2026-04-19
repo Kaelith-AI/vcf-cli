@@ -381,9 +381,18 @@ async function runStaleCheck(): Promise<void> {
 
 // ---- vcf install-skills ----------------------------------------------------
 
+const SKILL_CLIENT_DEFAULT_DEST: Record<string, () => string> = {
+  "claude-code": () => resolvePath(homedir(), ".claude", "skills"),
+  codex: () => resolvePath(homedir(), ".agents", "skills"),
+};
+
 async function runInstallSkills(client: string, opts: { dest?: string }): Promise<void> {
-  if (client !== "claude-code") {
-    err(`unknown client '${client}' — supported: claude-code`, 2);
+  const defaultDestFn = SKILL_CLIENT_DEFAULT_DEST[client];
+  if (!defaultDestFn) {
+    err(
+      `unknown client '${client}' — supported: ${Object.keys(SKILL_CLIENT_DEFAULT_DEST).join(", ")}`,
+      2,
+    );
   }
   // Resolve packaged skills dir (one level up from dist/).
   const pkgSkillsDir = resolvePath(
@@ -395,7 +404,7 @@ async function runInstallSkills(client: string, opts: { dest?: string }): Promis
   if (!existsSync(pkgSkillsDir)) {
     err(`skill pack missing in package at ${pkgSkillsDir}`, 3);
   }
-  const dest = opts.dest ?? resolvePath(homedir(), ".claude", "skills");
+  const dest = opts.dest ?? defaultDestFn();
   await mkdir(dest, { recursive: true });
 
   let installed = 0;
@@ -663,10 +672,13 @@ program
 program
   .command("install-skills")
   .description(
-    "Install the shipped skill pack into an MCP client's skills directory. Currently supports: claude-code.",
+    "Install the shipped skill pack into an MCP client's skills directory. Supported clients: claude-code, codex.",
   )
-  .argument("<client>", "target client (claude-code)")
-  .option("--dest <path>", "skills directory (default: ~/.claude/skills for claude-code)")
+  .argument("<client>", "target client (claude-code | codex)")
+  .option(
+    "--dest <path>",
+    "skills directory (default: ~/.claude/skills for claude-code, ~/.agents/skills for codex)",
+  )
   .action(async (client: string, opts: { dest?: string }) => {
     try {
       await runInstallSkills(client, opts);
