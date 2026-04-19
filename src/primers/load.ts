@@ -13,7 +13,7 @@ import { extname, join, relative } from "node:path";
 export type KbKind = "primer" | "best-practice" | "lens" | "stage" | "reviewer-config" | "standard";
 
 export interface KbEntry {
-  id: string; // path-relative key, e.g. "primers/mcp"
+  id: string; // path-relative key, e.g. "primers/mcp" (main KB) or "@acme/primers/foo" (pack)
   kind: KbKind;
   path: string; // absolute path to the file
   name: string; // primer_name | best_practice_name | lens_name | stage_name | standard_name | reviewer_type
@@ -24,8 +24,16 @@ export interface KbEntry {
   status?: string | undefined;
   updated?: string | undefined;
   last_reviewed?: string | undefined;
+  /** Source pack name if this entry came from a third-party pack; undefined for main KB. */
+  pack?: string | undefined;
   /** Raw frontmatter object for tools that want to surface it verbatim. */
   frontmatter: Record<string, unknown>;
+}
+
+/** Pack registration: slug + absolute path to the pack root. */
+export interface KbPackRef {
+  name: string;
+  root: string;
 }
 
 const DIR_TO_KIND: Record<string, KbKind> = {
@@ -41,9 +49,14 @@ const DIR_TO_KIND: Record<string, KbKind> = {
  * Walk `kb/` and return every *.md file's metadata. Skips files whose first
  * directory isn't a known KB kind — unrecognized subtrees are tolerated but
  * not surfaced.
+ *
+ * When `packs` is non-empty, each pack's `<root>/kb/` tree is walked too;
+ * its entries are tagged with `pack: <name>` and get IDs prefixed with
+ * `@<name>/` so they can never collide with main-KB entries.
  */
-export async function loadKb(kbRoot: string): Promise<KbEntry[]> {
+export async function loadKb(kbRoot: string, packs: KbPackRef[] = []): Promise<KbEntry[]> {
   const out: KbEntry[] = [];
+  // Main KB: un-namespaced, backward-compatible.
   for await (const full of walk(kbRoot)) {
     if (extname(full).toLowerCase() !== ".md") continue;
     const rel = relative(kbRoot, full);
@@ -55,6 +68,24 @@ export async function loadKb(kbRoot: string): Promise<KbEntry[]> {
     const fm = extractFrontmatter(raw);
     if (!fm) continue;
     out.push(normalize(fm, full, rel, kind));
+  }
+  // Packs: each walked under `<pack.root>/kb/` so the pack repo layout mirrors
+  // @kaelith-labs/kb. Missing pack directories are tolerated — logged once
+  // via stderr in the CLI path; the server treats them as "empty pack".
+  for (const pack of packs) {
+    const packKb = join(pack.root, "kb");
+    for await (const full of walk(packKb)) {
+      if (extname(full).toLowerCase() !== ".md") continue;
+      const rel = relative(packKb, full);
+      const top = rel.split(/[\\/]/)[0];
+      if (!top) continue;
+      const kind = DIR_TO_KIND[top];
+      if (!kind) continue;
+      const raw = await readFile(full, "utf8");
+      const fm = extractFrontmatter(raw);
+      if (!fm) continue;
+      out.push(normalize(fm, full, rel, kind, pack.name));
+    }
   }
   return out;
 }
@@ -113,6 +144,7 @@ function normalize(
   absolutePath: string,
   rel: string,
   kind: KbKind,
+  packName?: string,
 ): KbEntry {
   const toStringArray = (v: unknown): string[] => {
     if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
@@ -130,7 +162,8 @@ function normalize(
     s(fm["reviewer_type"]) ??
     rel.replace(/\.md$/, "");
 
-  const id = rel.replace(/\.md$/, "").replace(/[\\/]/g, "/");
+  const baseId = rel.replace(/\.md$/, "").replace(/[\\/]/g, "/");
+  const id = packName ? `@${packName}/${baseId}` : baseId;
 
   const entry: KbEntry = {
     id,
@@ -150,6 +183,7 @@ function normalize(
   };
   const cat = s(fm["category"]);
   if (cat !== undefined) entry.category = cat;
+  if (packName !== undefined) entry.pack = packName;
   return entry;
 }
 
@@ -167,21 +201,35 @@ const cache = new Map<string, CacheRecord>();
 const CACHE_TTL_MS = 30_000;
 
 /**
- * Return the KB entries for `kbRoot`, using a short-lived cache to keep
- * repeated tool calls fast. The cache expires after 30 seconds so primer
- * edits during active development become visible without a restart.
+ * Return the KB entries for `kbRoot` (plus any registered packs), using a
+ * short-lived cache to keep repeated tool calls fast. The cache expires
+ * after 30 seconds so primer edits during active development become
+ * visible without a restart.
+ *
+ * The cache key includes each pack's name + root so changing pack
+ * registration invalidates the cache — no stale reads after `vcf pack add`.
  */
-export async function loadKbCached(kbRoot: string): Promise<KbEntry[]> {
-  const hit = cache.get(kbRoot);
+export async function loadKbCached(kbRoot: string, packs: KbPackRef[] = []): Promise<KbEntry[]> {
+  const key =
+    kbRoot +
+    "|" +
+    packs
+      .map((p) => `${p.name}:${p.root}`)
+      .sort()
+      .join(",");
+  const hit = cache.get(key);
   const now = Date.now();
   if (hit && now - hit.scannedAt < CACHE_TTL_MS) return hit.entries;
   try {
     await stat(kbRoot);
   } catch {
-    return [];
+    // Missing main KB — still try packs; callers handle empty list gracefully.
+    const entries = await loadKb(kbRoot, packs);
+    cache.set(key, { entries, scannedAt: now });
+    return entries;
   }
-  const entries = await loadKb(kbRoot);
-  cache.set(kbRoot, { entries, scannedAt: now });
+  const entries = await loadKb(kbRoot, packs);
+  cache.set(key, { entries, scannedAt: now });
   return entries;
 }
 

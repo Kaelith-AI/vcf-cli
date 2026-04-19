@@ -361,7 +361,7 @@ async function runRegisterEndpoint(opts: {
 
 async function runStaleCheck(): Promise<void> {
   const config = await loadConfigOrExit();
-  const entries = await loadKb(config.kb.root);
+  const entries = await loadKb(config.kb.root, config.kb.packs);
   const thresholdMs = config.review.stale_primer_days * 86_400_000;
   const now = Date.now();
   let stale = 0;
@@ -382,6 +382,116 @@ async function runStaleCheck(): Promise<void> {
   log(
     `stale-check: ${stale} stale / ${entries.length} total (threshold ${config.review.stale_primer_days}d)`,
   );
+}
+
+// ---- vcf pack (add / list / remove) ---------------------------------------
+//
+// Manage third-party KB packs — community primer/best-practice/lens
+// extensions that live alongside the main @kaelith-labs/kb content.
+// Each pack is a directory with a `kb/` subtree mirroring the main KB
+// layout. Pack entries load with IDs prefixed `@<name>/...` so they
+// can never shadow main-KB files.
+//
+// These commands splice into `kb.packs:` in config.yaml (same pattern
+// as register-endpoint). No MCP equivalent — registration is a
+// deterministic operator action, not an LLM path.
+
+async function runPackAdd(opts: { name: string; path: string }): Promise<void> {
+  const path = process.env["VCF_CONFIG"] ?? DEFAULT_CONFIG_PATH();
+  let body = "";
+  try {
+    body = await readFile(path, "utf8");
+  } catch {
+    err(`config not found at ${path} — run 'vcf init' first`, 2);
+  }
+  const absRoot = resolvePath(opts.path);
+  // We need a `kb:` block with either a `packs:` sub-key or none yet.
+  // Simplest path: append to the end if no packs; splice under an
+  // existing packs: header otherwise.
+  if (/^\s{2}packs:\s*$/m.test(body)) {
+    // Existing packs: block — insert after it.
+    const entry = [`    - name: ${opts.name}`, `      root: ${absRoot}`].join("\n");
+    const updated = body.replace(/^(\s{2}packs:\s*\n)/m, `$1${entry}\n`);
+    if (updated === body) err("could not splice into kb.packs block; edit manually", 4);
+    await writeFile(`${path}.bak`, body, "utf8");
+    await writeFile(path, updated, "utf8");
+  } else if (/^kb:\s*$/m.test(body)) {
+    // kb: block exists but no packs: sub-key — append one under it.
+    // We assume kb: block is contiguous (common case); splice before the
+    // next top-level key or EOF.
+    const kbStart = body.search(/^kb:\s*$/m);
+    // Find end of kb block: next line starting at col 0 that's not
+    // whitespace-continuation, OR EOF.
+    const lines = body.split("\n");
+    let lineIdx = 0;
+    let charIdx = 0;
+    while (charIdx < kbStart) {
+      charIdx += lines[lineIdx]!.length + 1;
+      lineIdx++;
+    }
+    // Find end of kb block.
+    let endIdx = lineIdx + 1;
+    while (endIdx < lines.length) {
+      const l = lines[endIdx]!;
+      if (l.length > 0 && !l.startsWith(" ") && !l.startsWith("\t")) break;
+      endIdx++;
+    }
+    const insertion = ["  packs:", `    - name: ${opts.name}`, `      root: ${absRoot}`];
+    lines.splice(endIdx, 0, ...insertion);
+    const updated = lines.join("\n");
+    await writeFile(`${path}.bak`, body, "utf8");
+    await writeFile(path, updated, "utf8");
+  } else {
+    err("config.yaml has no 'kb:' key — edit the file manually", 4);
+  }
+  log(`registered KB pack '${opts.name}' → ${absRoot} (backup at ${path}.bak)`);
+  try {
+    await loadConfig(path);
+    log("config re-validated");
+  } catch (e) {
+    err(`config failed re-validation: ${(e as Error).message} — restoring from backup`, 5);
+  }
+}
+
+async function runPackList(): Promise<void> {
+  const config = await loadConfigOrExit();
+  if (config.kb.packs.length === 0) {
+    log("no KB packs registered");
+    return;
+  }
+  for (const p of config.kb.packs) {
+    process.stderr.write(`  ${p.name.padEnd(24)}  ${p.root}\n`);
+  }
+  log(`${config.kb.packs.length} pack(s) registered`);
+}
+
+async function runPackRemove(name: string): Promise<void> {
+  const path = process.env["VCF_CONFIG"] ?? DEFAULT_CONFIG_PATH();
+  let body = "";
+  try {
+    body = await readFile(path, "utf8");
+  } catch {
+    err(`config not found at ${path}`, 2);
+  }
+  // Remove the matching `- name: <name>` entry and its indented root line.
+  // Regex: `    - name: <name>\n      root: ...\n` — both indented under packs.
+  const pattern = new RegExp(
+    `^\\s{4}- name:\\s*${name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*\\n\\s{6}root:[^\\n]*\\n`,
+    "m",
+  );
+  if (!pattern.test(body)) {
+    err(`pack '${name}' not found in ${path}`, 2);
+  }
+  const updated = body.replace(pattern, "");
+  await writeFile(`${path}.bak`, body, "utf8");
+  await writeFile(path, updated, "utf8");
+  log(`removed KB pack '${name}' (backup at ${path}.bak)`);
+  try {
+    await loadConfig(path);
+    log("config re-validated");
+  } catch (e) {
+    err(`config failed re-validation: ${(e as Error).message} — restoring from backup`, 5);
+  }
 }
 
 // ---- vcf install-skills ----------------------------------------------------
@@ -971,6 +1081,49 @@ program
   .action(async () => {
     try {
       await runStaleCheck();
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+const pack = program
+  .command("pack")
+  .description("Manage third-party KB packs (community primer extensions).");
+
+pack
+  .command("add")
+  .description("Register a KB pack directory under kb.packs in config.yaml.")
+  .requiredOption("--name <slug>", "unique pack slug (lowercase alphanumeric + hyphen)")
+  .requiredOption(
+    "--path <absolute-path>",
+    "absolute path to the pack root (directory containing kb/)",
+  )
+  .action(async (opts: { name: string; path: string }) => {
+    try {
+      await runPackAdd(opts);
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+pack
+  .command("list")
+  .description("List registered KB packs.")
+  .action(async () => {
+    try {
+      await runPackList();
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+pack
+  .command("remove")
+  .description("Unregister a KB pack from config.yaml.")
+  .argument("<name>", "pack slug to remove")
+  .action(async (name: string) => {
+    try {
+      await runPackRemove(name);
     } catch (e) {
       err((e as Error).message);
     }

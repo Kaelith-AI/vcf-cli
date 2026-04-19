@@ -96,7 +96,7 @@ export function registerSpecSuggestPrimers(server: McpServer, deps: ServerDeps):
           );
         }
 
-        const entries = await loadKbCached(deps.config.kb.root);
+        const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
         const kindFilter = new Set(parsed.kinds);
         const filtered = entries.filter((e) => kindFilter.has(e.kind));
 

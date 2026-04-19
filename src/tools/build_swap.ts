@@ -45,7 +45,7 @@ export function registerBuildSwap(server: McpServer, deps: ServerDeps): void {
           throw new McpError("E_STATE_INVALID", "build_swap requires project scope");
         }
         const parsed = BuildSwapInput.parse(args);
-        const entries = await loadKbCached(deps.config.kb.root);
+        const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
         const bp = entries.find(
           (e) => e.kind === "best-practice" && e.name.toLowerCase() === parsed.to_type,
         );

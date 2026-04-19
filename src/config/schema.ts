@@ -106,6 +106,26 @@ export type ModelAlias = z.infer<typeof ModelAliasSchema>;
 
 // ---- Knowledge base location ------------------------------------------------
 
+// Third-party primer packs — community KB extensions. Each pack is a
+// directory containing a `kb/` subtree with the same layout as the main
+// KB (primers/, best-practices/, lenses/, review-system/, reviewers/,
+// standards/). Entries load with IDs prefixed by `@<name>/` so no pack
+// can shadow main-KB content.
+//
+// Security note: packs ship untrusted Markdown that flows into LLM
+// prompts. The server does not execute pack content, and redaction
+// still runs on any outbound LLM payload, but a malicious pack could
+// still inject instructions. Users install packs deliberately via
+// `vcf pack add` — there is no auto-discovery.
+export const KbPackSchema = z
+  .object({
+    name: SlugSchema,
+    root: AbsolutePathSchema,
+  })
+  .strict();
+
+export type KbPack = z.infer<typeof KbPackSchema>;
+
 export const KnowledgeBaseSchema = z
   .object({
     // Where the user's forked KB lives — populated by `vcf init` from the
@@ -114,6 +134,8 @@ export const KnowledgeBaseSchema = z
     // Optional upstream pin, used by `vcf update-primers` to know which KB
     // version to diff against.
     upstream_package: z.string().default("@kaelith-labs/kb"),
+    // Third-party primer packs. Empty by default.
+    packs: z.array(KbPackSchema).max(32).default([]),
   })
   .strict();
 
@@ -260,6 +282,18 @@ export const ConfigSchema = z
         path: ["endpoints"],
         message: `duplicate endpoint name: "${dup}"`,
       });
+    }
+    // KB pack names must be unique — they namespace entries at load time.
+    const packNames = new Set<string>();
+    for (const [i, pack] of cfg.kb.packs.entries()) {
+      if (packNames.has(pack.name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["kb", "packs", i, "name"],
+          message: `duplicate KB pack name: "${pack.name}"`,
+        });
+      }
+      packNames.add(pack.name);
     }
     // Model alias names must be unique.
     const aliasNames = new Set<string>();

@@ -126,7 +126,7 @@ async function readOptionalKbFile(deps: ServerDeps, rel: string): Promise<string
 
 /** Look up a best-practice by name in the KB; returns body or null. */
 async function findBestPracticeByName(deps: ServerDeps, name: string): Promise<string | null> {
-  const entries = await loadKbCached(deps.config.kb.root);
+  const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
   const match = entries.find(
     (e) => e.kind === "best-practice" && e.name.toLowerCase() === name.toLowerCase(),
   );

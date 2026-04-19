@@ -237,7 +237,7 @@ async function copyStageFile(
   stage: number,
   runDir: string,
 ): Promise<string> {
-  const entries = await loadKbCached(deps.config.kb.root);
+  const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
   const stageEntry = entries.find(
     (e) =>
       e.kind === "stage" &&
@@ -256,7 +256,7 @@ async function copyStageFile(
 }
 
 async function copyReviewerFile(deps: ServerDeps, type: string, runDir: string): Promise<string> {
-  const entries = await loadKbCached(deps.config.kb.root);
+  const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
   const reviewer = entries.find(
     (e) =>
       e.kind === "reviewer-config" &&
@@ -281,7 +281,7 @@ async function selectLenses(
   deps: ServerDeps,
   _root: string,
 ): Promise<Array<{ id: string; path: string }>> {
-  const entries = await loadKbCached(deps.config.kb.root);
+  const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
   // No spec tags available here without re-parsing; MVP returns all lenses.
   // M9 will refine this to the spec's tech_stack / lens intersection when
   // review_prepare accepts a plan_name input.

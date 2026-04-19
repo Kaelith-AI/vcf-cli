@@ -92,7 +92,7 @@ export function registerPlanContext(server: McpServer, deps: ServerDeps): void {
         );
 
         // Tag-matched primers.
-        const entries = await loadKbCached(deps.config.kb.root);
+        const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
         const kinds = new Set(["primer", "best-practice"]);
         const suggestions = matchPrimers(
           entries.filter((e) => kinds.has(e.kind)),

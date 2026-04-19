@@ -233,7 +233,7 @@ export function registerPrimerList(server: McpServer, deps: ServerDeps): void {
     async (args: z.infer<typeof PrimerListInput>) => {
       return runTool(async () => {
         const parsed = PrimerListInput.parse(args);
-        const all = await loadKbCached(deps.config.kb.root);
+        const all = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
         const filtered = all.filter((e) => {
           if (parsed.kind !== "all" && e.kind !== parsed.kind) return false;
           for (const t of parsed.tags) {
@@ -250,6 +250,7 @@ export function registerPrimerList(server: McpServer, deps: ServerDeps): void {
           ...(e.category !== undefined ? { category: e.category } : {}),
           ...(e.version !== undefined ? { version: e.version } : {}),
           ...(e.updated !== undefined ? { updated: e.updated } : {}),
+          ...(e.pack !== undefined ? { pack: e.pack } : {}),
         }));
         const payload = success(
           rows.map((r) => r.path),
