@@ -24,7 +24,10 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - name: Install deps
-        run: npm ci
+        # Use `npm install` rather than `npm ci` to sidestep the cross-platform
+        # optional-dep resolution bug in npm (npm/cli#4828). Strict lockfile
+        # behaviour is restored in the release workflow which only runs on ubuntu.
+        run: npm install --no-audit --no-fund
       - name: Lint
         run: npm run lint
       - name: Typecheck
