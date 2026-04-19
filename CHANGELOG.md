@@ -4,6 +4,48 @@ All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
+## [Unreleased]
+
+### Added
+
+- **`review_execute` MCP tool** — server-side review pass against any
+  configured OpenAI-compatible endpoint (Ollama `/v1`, OpenRouter, OpenAI
+  itself, CLIProxyAPI, LiteLLM, Together, Groq, LM Studio, …). Given a
+  `run_id` from `review_prepare` + an endpoint name, the server composes
+  the prompt from the disposable workspace, redacts outgoing content,
+  calls `/chat/completions`, parses a `{verdict, summary, findings,
+  carry_forward}` JSON response, and persists via the shared submit
+  core — same path `review_submit` uses.
+  - API keys resolve from env at call time (config stores the env-var
+    name via `auth_env_var`); rotation needs no server restart.
+  - Trust-level gate: `trust_level='public'` endpoints require explicit
+    `allow_public_endpoint: true`.
+  - Cancellation via MCP SDK signal + `timeout_ms` (default 180s).
+  - Audit row records run_id / endpoint / model / outcome only — never
+    prompt content, response body, or API key.
+- **`/review-execute` skill** in all three packs (claude-code, codex,
+  gemini) with endpoint-picking guidance.
+- **Shared `src/review/submitCore.ts`** — the render-report + DB-update
+  persistence both `review_submit` and `review_execute` call.
+- **`src/util/llmClient.ts`** — native-`fetch` OpenAI-compatible client
+  with URL-redacted error messages and no raw-body surfacing.
+
+### Changed
+
+- `review_submit` now delegates persistence to `submitCore` (behavior
+  unchanged).
+- MCP tool count: 28 → 29 (review_execute added).
+
+### Notes
+
+- Native Anthropic / Gemini / OAuth-linked accounts are *not* in this
+  tool. The OpenAI-compatible shape covers Ollama + OpenRouter + gateway
+  proxies, which is what Phase-2 expected; adapters for native protocols
+  are future work.
+- The "client sub-agent" path (Claude Code spawning Sonnet, Codex
+  spawning a nested model) remains a *client* concern — driven by the
+  existing `/review` skill, not `review_execute`.
+
 ## [0.0.2-alpha.0] — 2026-04-19
 
 ### Added

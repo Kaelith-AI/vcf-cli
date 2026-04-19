@@ -42,6 +42,7 @@ import { registerTestExecute } from "./tools/test_execute.js";
 import { registerTestAnalyze } from "./tools/test_analyze.js";
 import { registerReviewPrepare } from "./tools/review_prepare.js";
 import { registerReviewSubmit } from "./tools/review_submit.js";
+import { registerReviewExecute } from "./tools/review_execute.js";
 import { registerReviewHistory } from "./tools/review_history.js";
 import { registerShipAudit } from "./tools/ship_audit.js";
 import { registerShipBuild } from "./tools/ship_build.js";
@@ -165,6 +166,7 @@ export function createServer(deps: ServerDeps): McpServer {
     registerTestAnalyze(server, deps);
     registerReviewPrepare(server, deps);
     registerReviewSubmit(server, deps);
+    registerReviewExecute(server, deps);
     registerReviewHistory(server, deps);
     registerShipAudit(server, deps);
     registerShipBuild(server, deps);

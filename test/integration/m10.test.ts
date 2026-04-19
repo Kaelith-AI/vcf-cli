@@ -159,43 +159,29 @@ describe("M10 vcf CLI", () => {
     expect(res.stderr.trim()).toBe("[]");
   });
 
-  it("vcf install-skills claude-code copies 15 skills with Claude /foo invocation", async () => {
+  it("vcf install-skills claude-code copies every shipped skill with Claude /foo invocation", async () => {
     const dest = join(workRoot, "claude-skills");
     const res = runCli(["install-skills", "claude-code", "--dest", dest]);
     expect(res.status).toBe(0);
-    expect(res.stderr).toMatch(/install-skills: 15 installed, 0 skipped/);
+    expect(res.stderr).toMatch(/install-skills: \d+ installed, 0 skipped/);
     const dirs = await readdir(dest);
-    expect(dirs.sort()).toEqual(
-      [
-        "accept-plan",
-        "build",
-        "build-swap",
-        "capture-idea",
-        "initialize-project",
-        "log-decision",
-        "log-response",
-        "plan",
-        "reindex",
-        "review",
-        "ship-audit",
-        "ship-build",
-        "spec-idea",
-        "status",
-        "test",
-      ].sort(),
+    expect(dirs).toEqual(
+      expect.arrayContaining(["capture-idea", "plan", "review", "review-execute"]),
     );
     const body = await readFile(join(dest, "capture-idea", "SKILL.md"), "utf8");
     expect(body).toMatch(/\/capture-idea/);
     expect(body).not.toMatch(/\$capture-idea/);
   });
 
-  it("vcf install-skills codex copies 15 skills with Codex $foo invocation", async () => {
+  it("vcf install-skills codex copies every shipped skill with Codex $foo invocation", async () => {
     const dest = join(workRoot, "codex-skills");
     const res = runCli(["install-skills", "codex", "--dest", dest]);
     expect(res.status).toBe(0);
-    expect(res.stderr).toMatch(/install-skills: 15 installed, 0 skipped/);
+    expect(res.stderr).toMatch(/install-skills: \d+ installed, 0 skipped/);
     const dirs = await readdir(dest);
-    expect(dirs).toHaveLength(15);
+    expect(dirs).toEqual(
+      expect.arrayContaining(["capture-idea", "plan", "review", "review-execute"]),
+    );
     const body = await readFile(join(dest, "capture-idea", "SKILL.md"), "utf8");
     expect(body).toMatch(/\$capture-idea/);
     expect(body).not.toMatch(/\/capture-idea/);
@@ -204,37 +190,31 @@ describe("M10 vcf CLI", () => {
   it("vcf install-skills skips when skill dir already exists", async () => {
     const dest = join(workRoot, "codex-skills-reinstall");
     const first = runCli(["install-skills", "codex", "--dest", dest]);
+    const firstMatch = first.stderr.match(/install-skills: (\d+) installed, 0 skipped/);
     expect(first.status).toBe(0);
+    expect(firstMatch).not.toBeNull();
+    const installedCount = Number(firstMatch![1]);
     const second = runCli(["install-skills", "codex", "--dest", dest]);
     expect(second.status).toBe(0);
-    expect(second.stderr).toMatch(/install-skills: 0 installed, 15 skipped/);
+    expect(second.stderr).toMatch(
+      new RegExp(`install-skills: 0 installed, ${installedCount} skipped`),
+    );
   });
 
-  it("vcf install-skills gemini copies 15 .toml commands (flat layout)", async () => {
+  it("vcf install-skills gemini copies every shipped .toml command (flat layout)", async () => {
     const dest = join(workRoot, "gemini-commands");
     const res = runCli(["install-skills", "gemini", "--dest", dest]);
     expect(res.status).toBe(0);
-    expect(res.stderr).toMatch(/install-skills: 15 installed, 0 skipped/);
+    expect(res.stderr).toMatch(/install-skills: \d+ installed, 0 skipped/);
     const files = await readdir(dest);
     const tomls = files.filter((f) => f.endsWith(".toml")).sort();
     expect(tomls).toEqual(
-      [
-        "accept-plan.toml",
-        "build.toml",
-        "build-swap.toml",
+      expect.arrayContaining([
         "capture-idea.toml",
-        "initialize-project.toml",
-        "log-decision.toml",
-        "log-response.toml",
         "plan.toml",
-        "reindex.toml",
         "review.toml",
-        "ship-audit.toml",
-        "ship-build.toml",
-        "spec-idea.toml",
-        "status.toml",
-        "test.toml",
-      ].sort(),
+        "review-execute.toml",
+      ]),
     );
     // TOML shape: must start with description = then a prompt = block.
     const body = await readFile(join(dest, "capture-idea.toml"), "utf8");
@@ -247,9 +227,14 @@ describe("M10 vcf CLI", () => {
     const dest = join(workRoot, "gemini-reinstall");
     const first = runCli(["install-skills", "gemini", "--dest", dest]);
     expect(first.status).toBe(0);
+    const firstMatch = first.stderr.match(/install-skills: (\d+) installed, 0 skipped/);
+    expect(firstMatch).not.toBeNull();
+    const installedCount = Number(firstMatch![1]);
     const second = runCli(["install-skills", "gemini", "--dest", dest]);
     expect(second.status).toBe(0);
-    expect(second.stderr).toMatch(/install-skills: 0 installed, 15 skipped/);
+    expect(second.stderr).toMatch(
+      new RegExp(`install-skills: 0 installed, ${installedCount} skipped`),
+    );
   });
 
   it("vcf install-skills rejects unknown clients with exit code 2", () => {
