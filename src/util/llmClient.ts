@@ -126,6 +126,103 @@ function extractContent(json: unknown): string | null {
   return typeof c === "string" ? c : null;
 }
 
+// ---- Embeddings ------------------------------------------------------------
+
+export interface EmbeddingsRequest {
+  baseUrl: string;
+  apiKey: string | undefined;
+  model: string;
+  /** Batch. Providers that only accept single strings receive each via a
+   *  fan-out loop at the caller — we don't try to probe capabilities. */
+  inputs: string[];
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Returns a vector per input in the same order. Throws `LlmError` on
+ * failure. Matches the OpenAI-compatible `/embeddings` response shape
+ * (Ollama's `/v1/embeddings`, OpenRouter, OpenAI, LiteLLM, Nomic all
+ * speak it).
+ */
+export async function callEmbeddings(req: EmbeddingsRequest): Promise<number[][]> {
+  const url = joinUrl(req.baseUrl, "embeddings");
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    accept: "application/json",
+  };
+  if (req.apiKey && req.apiKey.length > 0) {
+    headers.authorization = `Bearer ${req.apiKey}`;
+  }
+  const body = { model: req.model, input: req.inputs };
+  const fetchFn = req.fetchImpl ?? fetch;
+  const init: RequestInit = {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  };
+  if (req.signal) init.signal = req.signal;
+
+  let res: Response;
+  try {
+    res = await fetchFn(url, init);
+  } catch (e) {
+    const err = e as Error & { name?: string };
+    if (err.name === "AbortError") throw new LlmError("canceled", "request aborted");
+    throw new LlmError("unreachable", `could not reach ${redactUrl(url)}: ${err.message}`);
+  }
+
+  if (!res.ok) {
+    try {
+      await res.text();
+    } catch {
+      /* ignore */
+    }
+    throw new LlmError("http", `${res.status} ${res.statusText}`, res.status);
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    throw new LlmError("bad-response", "response was not valid JSON");
+  }
+
+  const vectors = extractVectors(json);
+  if (vectors === null) {
+    throw new LlmError(
+      "bad-response",
+      "response missing data[].embedding arrays or length mismatch",
+    );
+  }
+  if (vectors.length !== req.inputs.length) {
+    throw new LlmError(
+      "bad-response",
+      `expected ${req.inputs.length} embeddings, got ${vectors.length}`,
+    );
+  }
+  return vectors;
+}
+
+function extractVectors(json: unknown): number[][] | null {
+  if (typeof json !== "object" || json === null) return null;
+  const data = (json as { data?: unknown }).data;
+  if (!Array.isArray(data) || data.length === 0) return null;
+  const out: number[][] = [];
+  for (const item of data) {
+    if (typeof item !== "object" || item === null) return null;
+    const emb = (item as { embedding?: unknown }).embedding;
+    if (!Array.isArray(emb)) return null;
+    const vec: number[] = [];
+    for (const n of emb) {
+      if (typeof n !== "number" || !Number.isFinite(n)) return null;
+      vec.push(n);
+    }
+    out.push(vec);
+  }
+  return out;
+}
+
 function joinUrl(base: string, path: string): string {
   const b = base.endsWith("/") ? base.slice(0, -1) : base;
   const p = path.startsWith("/") ? path.slice(1) : path;

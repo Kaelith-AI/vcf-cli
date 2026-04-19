@@ -46,6 +46,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   spawning a nested model) remains a *client* concern — driven by the
   existing `/review` skill, not `review_execute`.
 
+### Added — embedding-based primer selection
+
+- **Config: optional `embeddings: { endpoint, model, blend_weight?, cache_dir? }`**
+  block. `endpoint` references a declared `endpoints[]` entry (schema
+  refine fails loud on typo). `blend_weight` ∈ [0,1]: 0 = pure tag
+  Jaccard, 1 = pure cosine, default 0.5.
+- **`vcf embed-kb` CLI command** — walks primers / best-practices /
+  lenses / standards, POSTs each to the configured `/embeddings` surface
+  (Ollama + OpenRouter + OpenAI + LiteLLM + Nomic all speak it), writes
+  records under `~/.vcf/embeddings/<entry-id>.json`. Idempotent: entries
+  whose content SHA matches the cached record are skipped. Exits 8 if
+  any failures.
+- **Blended `spec_suggest_primers`** — when embeddings are configured
+  and the cache is populated, the tool embeds the query live (tag join),
+  computes cosine against each cached entry, and blends with the
+  normalized tag score. Falls back to tag-only automatically on: no
+  config block, empty cache, endpoint unreachable, live embed failure,
+  missing vector for a specific entry. Response now includes
+  `scoring: "tag" | "blended"` so callers can see which signal won.
+- **`callEmbeddings`** added to `src/util/llmClient.ts` — matches the
+  OpenAI-compatible `/embeddings` response shape, same URL-redacted
+  error handling as `callChatCompletion`.
+- Tests: 15 new unit cases for `src/primers/embed.ts` (cosine, blend,
+  cache round-trip, build-embedding-input, sha256) + 4 integration
+  cases for `spec_suggest_primers` blended scoring (including all three
+  fallback branches).
+- 174 tests green (was 162).
+
 ## [0.0.2-alpha.0] — 2026-04-19
 
 ### Added

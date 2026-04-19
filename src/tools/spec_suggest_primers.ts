@@ -11,12 +11,21 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { homedir } from "node:os";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
 import { loadKbCached } from "../primers/load.js";
-import { matchPrimers } from "../primers/match.js";
+import { matchPrimers, type MatchResult } from "../primers/match.js";
+import {
+  blend,
+  cosine,
+  defaultCacheDir,
+  loadEmbeddingCache,
+  normalizeTagScore,
+} from "../primers/embed.js";
+import { callEmbeddings, LlmError } from "../util/llmClient.js";
 
 const SuggestInput = z
   .object({
@@ -90,20 +99,35 @@ export function registerSpecSuggestPrimers(server: McpServer, deps: ServerDeps):
         const entries = await loadKbCached(deps.config.kb.root);
         const kindFilter = new Set(parsed.kinds);
         const filtered = entries.filter((e) => kindFilter.has(e.kind));
-        const results = matchPrimers(filtered, {
+
+        // Tag-only baseline: we always compute this so blending can layer on
+        // top and fallback is automatic when embeddings are unavailable.
+        const tagResults = matchPrimers(filtered, {
           tech_tags: tech,
           lens_tags: lens,
-          limit: parsed.limit,
+          // Do not slice yet — blend may reorder.
         });
+
+        let results = tagResults;
+        let scoring: "tag" | "blended" = "tag";
+        if (deps.config.embeddings) {
+          const blended = await tryBlend(deps, tech, lens, tagResults);
+          if (blended !== null) {
+            results = blended;
+            scoring = "blended";
+          }
+        }
+        if (typeof parsed.limit === "number") results = results.slice(0, parsed.limit);
 
         const payload = success(
           results.map((r) => r.path),
-          `Suggested ${results.length} KB entr(y|ies) for ${tech.length}+${lens.length} tag(s).`,
+          `Suggested ${results.length} KB entr(y|ies) for ${tech.length}+${lens.length} tag(s) [${scoring}].`,
           parsed.expand
             ? {
                 content: {
                   tech_tags: tech,
                   lens_tags: lens,
+                  scoring,
                   suggestions: results,
                 },
               }
@@ -135,4 +159,66 @@ function safeJson(raw: string): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * Try to blend cosine similarity into the tag-based ranking. Returns null
+ * on any fallback condition (no cache, endpoint unreachable, live embed
+ * failed, cache empty) so the caller falls through to pure tag scoring.
+ */
+async function tryBlend(
+  deps: ServerDeps,
+  tech: string[],
+  lens: string[],
+  tagResults: MatchResult[],
+): Promise<MatchResult[] | null> {
+  const cfg = deps.config.embeddings;
+  if (!cfg) return null;
+  const cacheDir = defaultCacheDir(homedir(), cfg.cache_dir);
+  const cache = await loadEmbeddingCache(cacheDir, cfg.model);
+  if (cache.byId.size === 0) return null; // nothing precomputed
+
+  const endpoint = deps.config.endpoints.find((e) => e.name === cfg.endpoint);
+  if (!endpoint) return null;
+  let apiKey: string | undefined;
+  if (endpoint.auth_env_var) {
+    apiKey = process.env[endpoint.auth_env_var];
+    if (!apiKey && endpoint.trust_level !== "local") return null;
+  }
+
+  const queryText = [...tech, ...lens].join(" ").trim();
+  if (queryText.length === 0) return null;
+
+  let queryVec: number[];
+  try {
+    const vectors = await callEmbeddings({
+      baseUrl: endpoint.base_url,
+      apiKey,
+      model: cfg.model,
+      inputs: [queryText],
+    });
+    const first = vectors[0];
+    if (!first || first.length === 0) return null;
+    queryVec = first;
+  } catch (e) {
+    // Any embedding-endpoint failure at query time falls back to tag-only.
+    void (e instanceof LlmError);
+    return null;
+  }
+
+  const maxTag = tagResults.reduce((m, r) => (r.score > m ? r.score : m), 0);
+
+  const blended = tagResults.map((r) => {
+    const vec = cache.byId.get(r.id);
+    const cos = vec ? cosine(queryVec, vec) : 0;
+    const tagNorm = normalizeTagScore(r.score, maxTag);
+    const combined = blend(tagNorm, cos, cfg.blend_weight);
+    return { ...r, score: Math.round(combined * 1000) / 1000 };
+  });
+
+  blended.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  return blended;
 }

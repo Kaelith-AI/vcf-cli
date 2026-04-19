@@ -163,6 +163,26 @@ export const TelemetrySchema = z
   })
   .strict();
 
+// ---- Embeddings (optional; off by default) ---------------------------------
+
+export const EmbeddingsSchema = z
+  .object({
+    // Must name one of config.endpoints[]. That endpoint's base_url +
+    // auth_env_var drive the embedding HTTP call (OpenAI-compatible
+    // /embeddings surface — Ollama + OpenRouter + OpenAI + LiteLLM all
+    // speak it).
+    endpoint: SlugSchema,
+    // Provider model id (e.g. "text-embedding-3-small", "nomic-embed-text",
+    // "mxbai-embed-large"). Mixing vectors from different models in one
+    // cache is undefined behavior; `vcf embed-kb` re-generates on change.
+    model: z.string().min(1).max(128),
+    // 0 = pure tag Jaccard, 1 = pure cosine. Blend when both signals exist.
+    blend_weight: z.number().min(0).max(1).default(0.5),
+    // Where vectors land. Default ~/.vcf/embeddings/.
+    cache_dir: z.string().max(4096).optional(),
+  })
+  .strict();
+
 // ---- Top-level --------------------------------------------------------------
 
 export const ConfigSchema = z
@@ -189,6 +209,7 @@ export const ConfigSchema = z
       extra_patterns: [],
     }),
     telemetry: TelemetrySchema.default({ error_reporting_enabled: false }),
+    embeddings: EmbeddingsSchema.optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {
@@ -202,6 +223,14 @@ export const ConfigSchema = z
           message: `endpoint "${alias.endpoint}" is not declared in endpoints[]`,
         });
       }
+    }
+    // embeddings.endpoint must also name a declared endpoint.
+    if (cfg.embeddings && !endpointNames.has(cfg.embeddings.endpoint)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["embeddings", "endpoint"],
+        message: `endpoint "${cfg.embeddings.endpoint}" is not declared in endpoints[]`,
+      });
     }
     // Endpoint names must be unique.
     const endpointDuplicates = new Set<string>();
