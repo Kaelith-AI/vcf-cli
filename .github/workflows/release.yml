@@ -32,18 +32,20 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm test
-
       - name: Build
         run: npm run build
 
+      - name: Test
+        run: npm test
+
       - name: Smoke-check built bins
+        shell: bash
         run: |
           node dist/cli.js version
           # The mcp bin requires a config; just verify it loads the CLI layer
           # and errors cleanly on missing config rather than crashing.
-          node dist/mcp.js --scope global || test $? -eq 3
+          # stdin closed so stdio server can't hang waiting for input.
+          node dist/mcp.js --scope global < /dev/null || test $? -eq 3
 
       - name: Publish to npm with provenance
         env:
