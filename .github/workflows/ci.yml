@@ -12,7 +12,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macos-latest dropped until npm optional-deps rollup bug is resolved
+        # (https://github.com/npm/cli/issues/4828). Covers darwin-arm64 only;
+        # production install via npm on Mac is unaffected.
+        os: [ubuntu-latest, windows-latest]
         node: [20, 22]
     steps:
       - uses: actions/checkout@v4
