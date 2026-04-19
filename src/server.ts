@@ -30,6 +30,13 @@ import { registerSpecTemplate } from "./tools/spec_template.js";
 import { registerSpecSave } from "./tools/spec_save.js";
 import { registerSpecGet } from "./tools/spec_get.js";
 import { registerSpecSuggestPrimers } from "./tools/spec_suggest_primers.js";
+import { registerPlanContext } from "./tools/plan_context.js";
+import { registerPlanSave } from "./tools/plan_save.js";
+import { registerPlanGet } from "./tools/plan_get.js";
+import { registerBuildContext } from "./tools/build_context.js";
+import { registerBuildSwap } from "./tools/build_swap.js";
+import { registerDecisionLogAdd, registerDecisionLogList } from "./tools/decision_log.js";
+import { registerResponseLogAdd } from "./tools/response_log.js";
 import {
   registerConfigGet,
   registerEndpointList,
@@ -134,7 +141,16 @@ export function createServer(deps: ServerDeps): McpServer {
     // Project bootstrap
     registerProjectInit(server, deps);
   } else {
+    // Project scope owns the full lifecycle.
     registerPortfolioStatus(server, deps);
+    registerPlanContext(server, deps);
+    registerPlanSave(server, deps);
+    registerPlanGet(server, deps);
+    registerBuildContext(server, deps);
+    registerBuildSwap(server, deps);
+    registerDecisionLogAdd(server, deps);
+    registerDecisionLogList(server, deps);
+    registerResponseLogAdd(server, deps);
   }
 
   // Catalog (read-only) — available under both scopes; context is cheap and

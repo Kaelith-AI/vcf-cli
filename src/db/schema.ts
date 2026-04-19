@@ -139,7 +139,12 @@ export const PROJECT_MIGRATIONS: Migration[] = [
 
       CREATE TABLE IF NOT EXISTS response_log (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        review_run_id   TEXT NOT NULL REFERENCES review_runs(id) ON DELETE CASCADE,
+        -- review_run_id is a free-form id string. The M5 response-log tool
+        -- accepts any value so builders can write stance notes before the
+        -- M7 review subsystem creates the matching review_runs row.
+        -- Application-level validation (tighter than a DB FK) is added when
+        -- M7 lands and the run-id lifecycle is known.
+        review_run_id   TEXT NOT NULL,
         stance          TEXT NOT NULL CHECK (stance IN ('agree','disagree')),
         note            TEXT NOT NULL,
         created_at      INTEGER NOT NULL
