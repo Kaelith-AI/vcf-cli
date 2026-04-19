@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, ci-matrix-probe]
+    branches: [main]
   pull_request:
 
 jobs:
