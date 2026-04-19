@@ -22,8 +22,20 @@ import { wrapResult, success } from "./envelope.js";
 import { writeAudit } from "./util/audit.js";
 import { log } from "./logger.js";
 import { registerIdeaCapture } from "./tools/idea_capture.js";
+import { registerIdeaSearch } from "./tools/idea_search.js";
+import { registerIdeaGet } from "./tools/idea_get.js";
 import { registerProjectInit } from "./tools/project_init.js";
 import { registerPortfolioStatus } from "./tools/portfolio_status.js";
+import { registerSpecTemplate } from "./tools/spec_template.js";
+import { registerSpecSave } from "./tools/spec_save.js";
+import { registerSpecGet } from "./tools/spec_get.js";
+import { registerSpecSuggestPrimers } from "./tools/spec_suggest_primers.js";
+import {
+  registerConfigGet,
+  registerEndpointList,
+  registerModelList,
+  registerPrimerList,
+} from "./tools/catalog.js";
 
 export interface ServerDeps {
   scope: Scope;
@@ -107,13 +119,31 @@ export function createServer(deps: ServerDeps): McpServer {
     },
   );
 
-  // Scope-partitioned tool registration (M3 spike + later milestones).
+  // Scope-partitioned tool registration. Global scope owns idea/spec/
+  // project-init + read-only catalog; project scope owns the lifecycle.
   if (deps.scope === "global") {
+    // Idea
     registerIdeaCapture(server, deps);
+    registerIdeaSearch(server, deps);
+    registerIdeaGet(server, deps);
+    // Spec
+    registerSpecTemplate(server, deps);
+    registerSpecSave(server, deps);
+    registerSpecGet(server, deps);
+    registerSpecSuggestPrimers(server, deps);
+    // Project bootstrap
     registerProjectInit(server, deps);
   } else {
     registerPortfolioStatus(server, deps);
   }
+
+  // Catalog (read-only) — available under both scopes; context is cheap and
+  // saves the client from having to re-load the server to look up model
+  // aliases mid-lifecycle.
+  registerConfigGet(server, deps);
+  registerEndpointList(server, deps);
+  registerModelList(server, deps);
+  registerPrimerList(server, deps);
 
   return server;
 }
