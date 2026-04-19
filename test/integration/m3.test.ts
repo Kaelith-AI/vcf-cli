@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -31,8 +31,8 @@ describe("M3 end-to-end skeleton spike (global scope)", () => {
   let home: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-m3-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-home-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-m3-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-home-")));
   });
   afterEach(async () => {
     await rm(workRoot, { recursive: true, force: true });
@@ -92,7 +92,7 @@ describe("M3 end-to-end skeleton spike (global scope)", () => {
     const env = parseResult(result);
     expect(env.ok).toBe(true);
     expect(env.paths).toBeDefined();
-    expect(env.paths?.[0]).toMatch(/ideas\/\d{4}-\d{2}-\d{2}-better-mousetrap\.md$/);
+    expect(env.paths?.[0]).toMatch(/ideas[/\\]\d{4}-\d{2}-\d{2}-better-mousetrap\.md$/);
     // file exists
     const body = await readFile(env.paths![0]!, "utf8");
     expect(body).toMatch(/---/);
@@ -182,8 +182,8 @@ describe("M3 project scope (portfolio_status)", () => {
   let home: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-m3p-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-homep-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-m3p-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-homep-")));
   });
   afterEach(async () => {
     await rm(workRoot, { recursive: true, force: true });

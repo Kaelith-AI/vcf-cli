@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -33,8 +33,8 @@ describe("M10 vcf CLI", () => {
   let projectDir: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-m10-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-m10h-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-m10-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-m10h-")));
     projectDir = join(workRoot, "demo");
     await mkdir(join(projectDir, ".vcf"), { recursive: true });
   });

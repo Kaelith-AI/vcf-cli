@@ -22,6 +22,7 @@ import { existsSync, statSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { VERSION, MCP_SPEC_VERSION } from "./version.js";
 import { loadConfig, ConfigError } from "./config/loader.js";
 import { canonicalizeRoots } from "./util/paths.js";
@@ -179,14 +180,17 @@ async function runReindex(opts: { project?: string }): Promise<void> {
   log(`reindex complete: ${count} artifact(s) upserted under ${target}`);
 }
 
-function classifyKind(path: string): string {
-  if (path.includes("/plans/decisions/")) return "decision";
-  if (path.endsWith("-plan.md")) return "plan";
-  if (path.endsWith("-todo.md")) return "todo";
-  if (path.endsWith("-manifest.md")) return "manifest";
-  if (path.endsWith("-spec.md")) return "spec";
-  if (path.includes("/memory/daily-logs/")) return "daily-log";
-  if (path.includes("/plans/reviews/")) return "review-report";
+function classifyKind(filePath: string): string {
+  // Normalize backslashes to forward-slashes so the directory-probe checks
+  // below behave identically on Windows (path.sep='\\') and POSIX.
+  const p = filePath.replace(/\\/g, "/");
+  if (p.includes("/plans/decisions/")) return "decision";
+  if (p.endsWith("-plan.md")) return "plan";
+  if (p.endsWith("-todo.md")) return "todo";
+  if (p.endsWith("-manifest.md")) return "manifest";
+  if (p.endsWith("-spec.md")) return "spec";
+  if (p.includes("/memory/daily-logs/")) return "daily-log";
+  if (p.includes("/plans/reviews/")) return "review-report";
   return "doc";
 }
 
@@ -409,12 +413,7 @@ async function runInstallSkills(client: string, opts: { dest?: string }): Promis
     err(`unknown client '${client}' — supported: ${Object.keys(SKILL_CLIENTS).join(", ")}`, 2);
   }
   // Resolve packaged skills dir (one level up from dist/).
-  const pkgSkillsDir = resolvePath(
-    dirname(new URL(import.meta.url).pathname),
-    "..",
-    "skills",
-    client,
-  );
+  const pkgSkillsDir = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "skills", client);
   if (!existsSync(pkgSkillsDir)) {
     err(`skill pack missing in package at ${pkgSkillsDir}`, 3);
   }
@@ -641,9 +640,9 @@ async function runUpdatePrimers(): Promise<void> {
   const ancestorRoot = resolvePath(homedir(), ".vcf", "kb-ancestors");
   let upstreamRoot: string | null = null;
   const candidates = [
-    resolvePath(dirname(new URL(import.meta.url).pathname), "..", "..", "vcf-kb", "kb"),
+    resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "vcf-kb", "kb"),
     resolvePath(
-      dirname(new URL(import.meta.url).pathname),
+      dirname(fileURLToPath(import.meta.url)),
       "..",
       "node_modules",
       "@kaelith-labs",
@@ -1021,8 +1020,9 @@ admin
 
 // Only parse argv when this file is run as the CLI entrypoint — otherwise
 // importing it from a test (or another module) would trigger a spurious
-// command parse against vitest's argv.
-const entryUrl = process.argv[1] ? new URL(`file://${process.argv[1]}`).href : "";
+// command parse against vitest's argv. `pathToFileURL` handles Windows
+// drive-letter paths (C:\...) where a naïve `file://` prefix would break.
+const entryUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 if (import.meta.url === entryUrl) {
   program.parseAsync(process.argv).catch((e: unknown) => {
     err(e instanceof Error ? e.message : String(e));

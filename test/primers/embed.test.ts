@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -58,7 +58,7 @@ describe("embedding cache round-trip", () => {
   let cacheDir: string;
 
   beforeEach(async () => {
-    cacheDir = await mkdtemp(join(tmpdir(), "vcf-embed-"));
+    cacheDir = await realpath(await mkdtemp(join(tmpdir(), "vcf-embed-")));
   });
   afterEach(async () => {
     await rm(cacheDir, { recursive: true, force: true });

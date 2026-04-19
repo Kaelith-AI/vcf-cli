@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadKb, loadKbCached, clearKbCache } from "../../src/primers/load.js";
@@ -8,7 +8,7 @@ describe("loadKb", () => {
   let root: string;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), "vcf-kb-"));
+    root = await realpath(await mkdtemp(join(tmpdir(), "vcf-kb-")));
     await mkdir(join(root, "primers"), { recursive: true });
     await mkdir(join(root, "best-practices"), { recursive: true });
     await mkdir(join(root, "unknown"), { recursive: true });

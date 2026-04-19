@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -38,8 +38,8 @@ describe("spec_suggest_primers — blended scoring with embeddings", () => {
   let cacheDir: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-esug-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-esugh-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-esug-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-esugh-")));
     kbRoot = join(home, ".vcf", "kb");
     cacheDir = join(home, ".vcf", "embeddings");
     await mkdir(join(kbRoot, "primers"), { recursive: true });

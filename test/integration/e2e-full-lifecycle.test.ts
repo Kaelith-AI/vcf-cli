@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -49,8 +49,8 @@ describe("e2e: full lifecycle", () => {
   let projectDir: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-e2e-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-e2e-h-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-e2e-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-e2e-h-")));
     kbRoot = join(home, ".vcf", "kb");
     projectDir = join(workRoot, "demo");
 
@@ -205,7 +205,7 @@ describe("e2e: full lifecycle", () => {
     );
     const ideaPath = capEnv.paths?.[0];
     expect(ideaPath).toBeDefined();
-    expect(ideaPath!).toMatch(/ideas\/\d{4}-\d{2}-\d{2}-primer-scraper\.md$/);
+    expect(ideaPath!).toMatch(/ideas[/\\]\d{4}-\d{2}-\d{2}-primer-scraper\.md$/);
 
     // ---- 2. spec (save directly; conversational fill is the client's job) ----
     const specMd = [

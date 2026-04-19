@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtemp, mkdir, symlink, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { assertInsideAllowedRoot, PathError, canonicalizeRoots } from "../../src/util/paths.js";
@@ -12,7 +12,7 @@ describe("assertInsideAllowedRoot", () => {
   let outside: string;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), "vcf-paths-"));
+    root = await realpath(await mkdtemp(join(tmpdir(), "vcf-paths-")));
     allowed = join(root, "allowed");
     outside = join(root, "outside");
     await mkdir(allowed, { recursive: true });
@@ -106,7 +106,7 @@ describe("assertInsideAllowedRoot", () => {
 
 describe("canonicalizeRoots", () => {
   it("resolves symlinks in roots", async () => {
-    const root = await mkdtemp(join(tmpdir(), "vcf-roots-"));
+    const root = await realpath(await mkdtemp(join(tmpdir(), "vcf-roots-")));
     const real = join(root, "real");
     const link = join(root, "link");
     await mkdir(real, { recursive: true });

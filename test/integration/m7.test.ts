@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -33,8 +33,8 @@ describe("M7 review subsystem (project scope)", () => {
   let projectDir: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-m7-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-m7h-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-m7-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-m7h-")));
     kbRoot = join(home, ".vcf", "kb");
     projectDir = join(workRoot, "demo");
     await mkdir(join(projectDir, ".vcf"), { recursive: true });

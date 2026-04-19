@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci-matrix-probe]
   pull_request:
 
 jobs:
@@ -12,12 +12,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest and windows-latest dropped for MVP — npm/cli#4828
-        # (cross-platform optional-dep resolution from a Linux-generated
-        # lockfile) is the blocker. `npm install` on a clean clone works
-        # fine for end users on those platforms; the issue is specific to
-        # CI reusing a lockfile. Revisit once npm merges a fix.
-        os: [ubuntu-latest]
+        # npm/cli#4828 (Linux-generated lockfile missing per-platform
+        # optional deps for Windows/macOS runners) was closed 2025-04-03;
+        # lockfile regenerated 2026-04-19 now carries 25 per-platform
+        # rollup entries, so the three-OS matrix can come back.
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: [20, 22]
     steps:
       - uses: actions/checkout@v4

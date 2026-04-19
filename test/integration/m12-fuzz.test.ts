@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -37,8 +37,8 @@ describe("M12 fuzz: every tool rejects malformed input safely", () => {
   let home: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-m12-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-m12h-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-m12-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-m12h-")));
   });
   afterEach(async () => {
     await rm(workRoot, { recursive: true, force: true });

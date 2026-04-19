@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -33,8 +33,8 @@ describe("ship_release plan/confirm contract", () => {
   let projectDir: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-ship-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-ship-h-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-ship-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-ship-h-")));
     projectDir = join(workRoot, "demo");
     await mkdir(join(projectDir, ".vcf"), { recursive: true });
     __resetShipReleaseStoreForTests();

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -31,8 +31,8 @@ describe("M4 global-scope fan-out", () => {
   let kbRoot: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-m4-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-m4h-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-m4-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-m4h-")));
     kbRoot = join(home, ".vcf", "kb");
     await mkdir(join(kbRoot, "primers"), { recursive: true });
     await mkdir(join(kbRoot, "best-practices"), { recursive: true });

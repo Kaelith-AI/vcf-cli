@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mergePrimerTree } from "../src/cli.js";
@@ -21,7 +21,7 @@ describe("update-primers three-way merge", () => {
   let ancestor: string;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "vcf-merge-"));
+    root = await realpath(await mkdtemp(join(tmpdir(), "vcf-merge-")));
     upstream = join(root, "upstream");
     kb = join(root, "kb");
     ancestor = join(root, "ancestor");

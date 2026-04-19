@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openGlobalDb } from "../../src/db/global.js";
@@ -8,7 +8,7 @@ import { openProjectDb } from "../../src/db/project.js";
 describe("global DB", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "vcf-dbg-"));
+    dir = await realpath(await mkdtemp(join(tmpdir(), "vcf-dbg-")));
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
@@ -68,7 +68,7 @@ describe("global DB", () => {
 describe("project DB", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "vcf-dbp-"));
+    dir = await realpath(await mkdtemp(join(tmpdir(), "vcf-dbp-")));
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });

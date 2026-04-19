@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -48,8 +48,8 @@ describe("review_execute (server-side LLM review)", () => {
   let projectDir: string;
 
   beforeEach(async () => {
-    workRoot = await mkdtemp(join(tmpdir(), "vcf-rex-"));
-    home = await mkdtemp(join(tmpdir(), "vcf-rexh-"));
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-rex-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-rexh-")));
     kbRoot = join(home, ".vcf", "kb");
     projectDir = join(workRoot, "demo");
     await mkdir(join(projectDir, ".vcf"), { recursive: true });
