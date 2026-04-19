@@ -150,12 +150,21 @@ describe("ship_release plan/confirm contract", () => {
       }),
     );
     const token = (first.content as { confirm_token: string }).confirm_token;
-    // First consumption — gh is not installed as a real binary in test
-    // env (or may be), so we don't care about the exit code here; we just
-    // want to consume the token.
+    // First consumption — `gh` behavior varies by platform: on Linux CI
+    // runners it errors fast with an auth failure; on Windows Node 22
+    // CI runners it can hang indefinitely on an interactive auth prompt.
+    // Short timeout_ms keeps this test deterministic. The timeout is in
+    // the tool code itself (it kills the child and resolves with
+    // timed_out=true), so the test doesn't rely on the subprocess ever
+    // returning on its own.
     await client.callTool({
       name: "ship_release",
-      arguments: { tag: "v0.0.1-alpha.0", draft: true, confirm_token: token },
+      arguments: {
+        tag: "v0.0.1-alpha.0",
+        draft: true,
+        confirm_token: token,
+        timeout_ms: 2000,
+      },
     });
     // Second consumption — must be refused.
     const env = parseResult(

@@ -58,6 +58,13 @@ const ShipReleaseInput = z
       .string()
       .optional()
       .describe("token returned by the prior plan call; omit to request a new plan"),
+    timeout_ms: z
+      .number()
+      .int()
+      .positive()
+      .max(10 * 60_000)
+      .default(60_000)
+      .describe("kill the gh subprocess if it runs longer than this (ms, default 60s)"),
     expand: z.boolean().default(true),
   })
   .strict();
@@ -145,21 +152,43 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
             : new McpError("E_CONFIRM_REQUIRED", (err as Error).message);
         }
 
-        // Execute.
+        // Execute. Timeout is enforced in-process: if gh doesn't close
+        // within parsed.timeout_ms we SIGTERM it and resolve with
+        // exit_code: null + timed_out: true. Prevents a hung gh (e.g.
+        // auth prompt on CI, network stall) from leaking the handler.
         const result = await new Promise<{
           exit_code: number | null;
           stdout_tail: string;
           stderr_tail: string;
           duration_ms: number;
+          timed_out: boolean;
         }>((resolve) => {
           const startedAt = Date.now();
           let stdoutBuf = "";
           let stderrBuf = "";
+          let settled = false;
           const child = spawn(cmd.command, cmd.args, {
             cwd: projectRoot,
             stdio: ["ignore", "pipe", "pipe"],
           });
           const TAIL = 16 * 1024;
+          const timer = setTimeout(() => {
+            if (settled) return;
+            stderrBuf += `\n[timeout] gh killed after ${parsed.timeout_ms}ms\n`;
+            try {
+              child.kill("SIGTERM");
+            } catch {
+              /* child may have already exited */
+            }
+            settled = true;
+            resolve({
+              exit_code: null,
+              stdout_tail: stdoutBuf,
+              stderr_tail: stderrBuf,
+              duration_ms: Date.now() - startedAt,
+              timed_out: true,
+            });
+          }, parsed.timeout_ms);
           child.stdout.on("data", (c: Buffer) => {
             stdoutBuf += c.toString("utf8");
             if (stdoutBuf.length > TAIL) stdoutBuf = stdoutBuf.slice(stdoutBuf.length - TAIL);
@@ -169,20 +198,28 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
             if (stderrBuf.length > TAIL) stderrBuf = stderrBuf.slice(stderrBuf.length - TAIL);
           });
           child.on("error", (err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
             stderrBuf += `\n[spawn error] ${(err as Error).message}\n`;
             resolve({
               exit_code: null,
               stdout_tail: stdoutBuf,
               stderr_tail: stderrBuf,
               duration_ms: Date.now() - startedAt,
+              timed_out: false,
             });
           });
           child.on("close", (code) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
             resolve({
               exit_code: code,
               stdout_tail: stdoutBuf,
               stderr_tail: stderrBuf,
               duration_ms: Date.now() - startedAt,
+              timed_out: false,
             });
           });
         });
