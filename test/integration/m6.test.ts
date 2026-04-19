@@ -103,6 +103,73 @@ describe("M6 test pipeline (project scope)", () => {
     expect(stubs.find((s) => s.kind === "volume")?.body).toContain("5000");
   });
 
+  it("test_generate fans out fannable kinds across dependencies", async () => {
+    const { client } = await connectProject();
+    const env = parseResult(
+      await client.callTool({
+        name: "test_generate",
+        arguments: {
+          kinds: ["unit", "db", "rate-limit"],
+          dependencies: ["postgres", "redis", "openai"],
+          expand: true,
+        },
+      }),
+    );
+    expect(env.ok).toBe(true);
+    const stubs = (
+      env.content as { stubs: Array<{ kind: string; dependency: string | null; body: string }> }
+    ).stubs;
+    // unit (non-fannable) = 1; db × 3 deps = 3; rate-limit × 3 deps = 3 → 7 total.
+    expect(stubs).toHaveLength(7);
+    expect(stubs.filter((s) => s.kind === "unit")).toHaveLength(1);
+    expect(
+      stubs
+        .filter((s) => s.kind === "db")
+        .map((s) => s.dependency)
+        .sort(),
+    ).toEqual(["openai", "postgres", "redis"]);
+    // db-postgres stub picks up the postgres-specific template.
+    const pg = stubs.find((s) => s.kind === "db" && s.dependency === "postgres");
+    expect(pg?.body).toMatch(/postgres/i);
+    expect(pg?.body).toMatch(/statement_timeout|pg_dump|prepared-statement/i);
+    // rate-limit-openai stub picks up the openai-specific template.
+    const rl = stubs.find((s) => s.kind === "rate-limit" && s.dependency === "openai");
+    expect(rl?.body).toMatch(/TPM|retry-after/i);
+    // unknown dep on a fannable kind falls through to the generic template.
+    const env2 = parseResult(
+      await client.callTool({
+        name: "test_generate",
+        arguments: {
+          kinds: ["db"],
+          dependencies: ["unknown-db-kind"],
+          expand: true,
+        },
+      }),
+    );
+    const generic = (env2.content as { stubs: Array<{ dependency: string | null; body: string }> })
+      .stubs[0]!;
+    expect(generic.body).toMatch(/schema invariant/i);
+    expect(generic.dependency).toBe("unknown-db-kind");
+  });
+
+  it("test_generate emits a generic stub per fannable kind when no deps supplied", async () => {
+    const { client } = await connectProject();
+    const env = parseResult(
+      await client.callTool({
+        name: "test_generate",
+        arguments: { kinds: ["db", "volume"], scale_target: 200, expand: true },
+      }),
+    );
+    expect(env.ok).toBe(true);
+    const stubs = (
+      env.content as { stubs: Array<{ kind: string; dependency: string | null; body: string }> }
+    ).stubs;
+    expect(stubs).toHaveLength(2);
+    expect(stubs.every((s) => s.dependency === null)).toBe(true);
+    // volume generic still picks up the 10× scale.
+    expect(stubs.find((s) => s.kind === "volume")?.body).toContain("2000");
+  });
+
   it("test_execute runs a zero-exit command successfully", async () => {
     const { client, projectDb } = await connectProject();
     const env = parseResult(

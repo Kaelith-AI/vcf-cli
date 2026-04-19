@@ -19,12 +19,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   [geminicli.com/docs/cli/custom-commands](https://geminicli.com/docs/cli/custom-commands/).
   Each command exposes a `description` for `/help` and a `prompt` that
   instructs Gemini to call the matching MCP tool.
+- **`test_generate` per-dependency matrix.** The tool now fans fannable
+  kinds (`db`, `prompt-injection`, `rate-limit`, `volume`) across a
+  `dependencies: string[]` input so the returned stubs name concrete
+  pitfalls for postgres / redis / mysql / sqlite / mongodb / dynamodb,
+  openai / anthropic / gemini / ollama, stripe / sendgrid / github,
+  http / websocket / grpc / db-pool / queue. Non-fannable kinds (`unit`,
+  `integration`, `regression`) remain single-stub. The spec-required 10×
+  scale-target math still drives the volume stubs.
 
 ### Changed
 
 - `vcf install-skills` now accepts `claude-code`, `codex`, and `gemini`
   (two nested-markdown layouts + one flat-TOML layout); unknown clients
   exit with a supported-list error.
+- `test_generate` input: **`dependency: string?` → `dependencies: string[]`**
+  (max 32, kebab-case). Stubs now include a `dependency` field on each
+  entry so callers can route files by concrete tech rather than just kind.
+  Unknown deps fall through to the kind's generic template.
 
 ## [0.0.1-alpha.0] — 2026-04-19
 
