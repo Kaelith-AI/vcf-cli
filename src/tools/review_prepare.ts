@@ -39,11 +39,19 @@ import { loadKbCached } from "../primers/load.js";
 import { matchPrimers } from "../primers/match.js";
 import { emptyCarryForward, renderYaml, type CarryForward } from "../review/carryForward.js";
 
-const REVIEW_TYPES = ["code", "security", "production"] as const;
+// Review type is validated against `config.review.categories` at runtime, not
+// with a fixed z.enum — users may extend the set via their config.yaml (e.g.
+// add "accessibility" or "performance"). The schema still enforces the slug
+// shape so the arg itself can't carry a path-traversal payload.
+const ReviewTypeSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z0-9][a-z0-9-]*$/, "review type must be lowercase alphanumeric + hyphen");
 
 const ReviewPrepareInput = z
   .object({
-    type: z.enum(REVIEW_TYPES),
+    type: ReviewTypeSchema,
     stage: z.number().int().min(1).max(9),
     diff_ref: z
       .string()
@@ -70,6 +78,12 @@ export function registerReviewPrepare(server: McpServer, deps: ServerDeps): void
           throw new McpError("E_STATE_INVALID", "review_prepare requires project scope");
         }
         const parsed = ReviewPrepareInput.parse(args);
+        if (!deps.config.review.categories.includes(parsed.type)) {
+          throw new McpError(
+            "E_VALIDATION",
+            `review type '${parsed.type}' not in config.review.categories (${deps.config.review.categories.join(", ")})`,
+          );
+        }
         const root = readProjectRoot(deps);
         if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 

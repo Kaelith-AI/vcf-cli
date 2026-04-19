@@ -10,9 +10,18 @@ import { runTool, success } from "../envelope.js";
 import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
 
+// Type is a slug-shaped string rather than a fixed enum; review.categories
+// in config is the runtime source of truth. We reject unknown types with
+// E_VALIDATION so a typo'd category surfaces immediately instead of silently
+// returning an empty set.
 const ReviewHistoryInput = z
   .object({
-    type: z.enum(["code", "security", "production"]).optional(),
+    type: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[a-z0-9][a-z0-9-]*$/, "review type must be lowercase alphanumeric + hyphen")
+      .optional(),
     stage: z.number().int().min(1).max(9).optional(),
     limit: z.number().int().min(1).max(200).default(50),
     expand: z.boolean().default(true),
@@ -34,6 +43,12 @@ export function registerReviewHistory(server: McpServer, deps: ServerDeps): void
           throw new McpError("E_STATE_INVALID", "review_history requires project scope");
         }
         const parsed = ReviewHistoryInput.parse(args);
+        if (parsed.type !== undefined && !deps.config.review.categories.includes(parsed.type)) {
+          throw new McpError(
+            "E_VALIDATION",
+            `review type '${parsed.type}' not in config.review.categories (${deps.config.review.categories.join(", ")})`,
+          );
+        }
         const clauses: string[] = [];
         const params: Array<string | number> = [];
         if (parsed.type !== undefined) {

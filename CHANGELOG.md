@@ -4,10 +4,28 @@ All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
-## [Unreleased]
+## [0.1.0-alpha.0] — 2026-04-19
+
+Milestone release rolling up the Phase-2 wave: server-side LLM review,
+embedding-based primer selection, sub-agent review skill, full Windows
++ macOS CI matrix, and user-defined reviewer categories.
 
 ### Added
 
+- **Custom reviewer categories** — `review.categories` in `config.yaml`
+  is now fully honored at runtime. Add `"accessibility"` (or any slug)
+  to the list, drop a stage file under
+  `kb/review-system/accessibility/0N-*.md` with matching `review_type:`
+  frontmatter, and `review_prepare`/`review_history` accept it end-to-end.
+  Unknown types are rejected with `E_VALIDATION` that names the
+  configured set so typos surface immediately.
+- **Full cross-platform CI matrix** — ubuntu/macos/windows × Node 20/22
+  on every push and PR. Re-enabled after resolving two Windows-only
+  failure classes: (1) path separator + `realpath` canonicalization
+  in tests; (2) SQLite `.db` / `-wal` / `-shm` OS-level locks blocking
+  `fs.rm` in `afterEach`. Fixed via an explicit `closeTrackedDbs()`
+  helper that tests call at the start of their cleanup, before `rm`.
+  Windows cells run in ~70–130s; Linux/macOS in ~25–40s.
 - **`review_execute` MCP tool** — server-side review pass against any
   configured OpenAI-compatible endpoint (Ollama `/v1`, OpenRouter, OpenAI
   itself, CLIProxyAPI, LiteLLM, Together, Groq, LM Studio, …). Given a
@@ -72,12 +90,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   cache round-trip, build-embedding-input, sha256) + 4 integration
   cases for `spec_suggest_primers` blended scoring (including all three
   fallback branches).
-- 174 tests green (was 162).
-
-## [Unreleased]
-
-### Added
-
+- 178 tests green (was 162).
 - **`/review-subagent` skill** (claude-code + codex + gemini) — completes
   the three-path review story: `/review` (parent agent reviews in-context),
   `/review-subagent` (parent spawns a fresh sub-agent that calls MCP
