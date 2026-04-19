@@ -170,5 +170,5 @@ Apache-2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
 ## Links
 
-- KB: [github.com/Kaelith-AI/vcf-kb](https://github.com/Kaelith-AI/vcf-kb)
+- KB: [github.com/Kaelith-Labs/vcf-kb](https://github.com/Kaelith-Labs/vcf-kb)
 - CHANGELOG: [./CHANGELOG.md](./CHANGELOG.md)
