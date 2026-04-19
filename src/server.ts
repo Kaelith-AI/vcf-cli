@@ -40,6 +40,9 @@ import { registerResponseLogAdd } from "./tools/response_log.js";
 import { registerTestGenerate } from "./tools/test_generate.js";
 import { registerTestExecute } from "./tools/test_execute.js";
 import { registerTestAnalyze } from "./tools/test_analyze.js";
+import { registerReviewPrepare } from "./tools/review_prepare.js";
+import { registerReviewSubmit } from "./tools/review_submit.js";
+import { registerReviewHistory } from "./tools/review_history.js";
 import {
   registerConfigGet,
   registerEndpointList,
@@ -157,6 +160,9 @@ export function createServer(deps: ServerDeps): McpServer {
     registerTestGenerate(server, deps);
     registerTestExecute(server, deps);
     registerTestAnalyze(server, deps);
+    registerReviewPrepare(server, deps);
+    registerReviewSubmit(server, deps);
+    registerReviewHistory(server, deps);
   }
 
   // Catalog (read-only) — available under both scopes; context is cheap and
