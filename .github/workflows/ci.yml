@@ -26,10 +26,10 @@ jobs:
         run: npm run lint
       - name: Typecheck
         run: npm run typecheck
-      - name: Unit tests
-        run: npm test
       - name: Build
         run: npm run build
+      - name: Unit tests
+        run: npm test
       - name: Smoke-check built bins
         shell: bash
         run: |

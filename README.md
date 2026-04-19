@@ -1,4 +1,4 @@
-# @vcf/cli
+# @kaelith-labs/cli
 
 **Status:** alpha. MVP shipped. Not yet published to npm (awaiting tag + NPM_TOKEN).
 
@@ -16,7 +16,7 @@ The **Vibe Coding Framework MCP** — an LLM-agnostic Model Context Protocol ser
 ## Install (once published)
 
 ```bash
-npm install -g @vcf/cli
+npm install -g @kaelith-labs/cli
 ```
 
 Two bins land: `vcf` (maintenance CLI) and `vcf-mcp` (stdio MCP server).
@@ -45,7 +45,7 @@ Copies the 15-skill pack into `~/.claude/skills/`.
 
 In Claude Code:
 
-> _"capture this idea: a primer-scraper that pulls newly-added docs from @vcf/kb and summarizes the diff as an email digest"_
+> _"capture this idea: a primer-scraper that pulls newly-added docs from @kaelith-labs/kb and summarizes the diff as an email digest"_
 
 Claude's `capture-idea` skill fires `idea_capture`. The result is `~/vcf/ideas/YYYY-MM-DD-primer-scraper.md` with tagged frontmatter, indexed in the global DB.
 
@@ -71,7 +71,7 @@ Open a new MCP client session in the project directory. The project's `.mcp.json
 
 - `planner.md` (role overlay + what a good plan must name and forbid)
 - `company-standards.md` + `vibe-coding-primer.md`
-- **Tag-matched primers** — the engine ranks `@vcf/kb` entries against the spec's `tech_stack` + `lens` tags (weighted Jaccard; fresher `last_reviewed` wins ties).
+- **Tag-matched primers** — the engine ranks `@kaelith-labs/kb` entries against the spec's `tech_stack` + `lens` tags (weighted Jaccard; fresher `last_reviewed` wins ties).
 - The spec body
 
 Claude writes `plans/scraper-plan.md` / `scraper-todo.md` / `scraper-manifest.md`. `plan_save(advance_state: "planning")` persists and bumps project state.
@@ -97,7 +97,7 @@ At phase boundaries the plan named: `/build-swap backend frontend scraper` retur
 
 > _"/review code 1"_
 
-`review_prepare` creates a **disposable** `.review-runs/code-1-<ts>/` workspace. It _copies_ (never references) the stage file + reviewer overlay from `@vcf/kb`, writes a `carry-forward.yaml` seeded from the most recent Stage-0 PASS, snapshots the decision + response logs, and (if `diff_ref` given) writes a scoped git diff.
+`review_prepare` creates a **disposable** `.review-runs/code-1-<ts>/` workspace. It _copies_ (never references) the stage file + reviewer overlay from `@kaelith-labs/kb`, writes a `carry-forward.yaml` seeded from the most recent Stage-0 PASS, snapshots the decision + response logs, and (if `diff_ref` given) writes a scoped git diff.
 
 The reviewer LLM produces `{verdict: PASS|NEEDS_WORK|BLOCK, summary, findings, carry_forward}` → `review_submit`. Report lands at `plans/reviews/code/stage-1-<ts>.md`.
 
@@ -129,7 +129,7 @@ vcf register-endpoint \      # append a new LLM endpoint to config.yaml
   --trust-level public \
   --auth-env-var OPENAI_API_KEY
 vcf stale-check              # flag KB entries past review.stale_primer_days
-vcf update-primers           # pull latest @vcf/kb (warn + skip on conflicts)
+vcf update-primers           # pull latest @kaelith-labs/kb (warn + skip on conflicts)
 vcf admin audit --tool idea_capture --format table
 ```
 
@@ -143,7 +143,7 @@ These are intentionally not MCP tools. Deterministic maintenance that a human or
 | `@modelcontextprotocol/sdk` | **^1.29** (v2 is pre-alpha)                      |
 | Node                       | **≥ 20 LTS**                                      |
 | Zod                        | **^4**                                            |
-| Content package            | `@vcf/kb` peer dep in range `>=0.0.1-alpha <0.2.0` |
+| Content package            | `@kaelith-labs/kb` peer dep in range `>=0.0.1-alpha <0.2.0` |
 
 ## Non-negotiables (enforced in code, not aspirational)
 

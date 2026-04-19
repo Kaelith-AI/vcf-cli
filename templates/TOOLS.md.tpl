@@ -21,6 +21,6 @@ Maintenance lives on the `vcf` CLI, not MCP:
 vcf reindex                    # re-scan files into SQLite
 vcf verify                     # check config + KB + hooks
 vcf register-endpoint          # add an LLM endpoint
-vcf update-primers             # pull latest @vcf/kb
+vcf update-primers             # pull latest @kaelith-labs/kb
 vcf admin audit                # query audit log
 ```

@@ -196,7 +196,7 @@ describe("e2e: full lifecycle", () => {
         ).client.callTool({
           name: "idea_capture",
           arguments: {
-            content: "Primer scraper that digests @vcf/kb diffs daily.",
+            content: "Primer scraper that digests @kaelith-labs/kb diffs daily.",
             title: "Primer Scraper",
             tags: ["infra", "ai"],
           },

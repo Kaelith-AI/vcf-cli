@@ -22,7 +22,7 @@ import { z } from "zod";
 // ---- Reusable leaves --------------------------------------------------------
 
 // Exported because the primer tag-matching engine (M3.5) and KB frontmatter
-// validators in @vcf/kb both depend on the exact same tag shape.
+// validators in @kaelith-labs/kb both depend on the exact same tag shape.
 export const TagSchema = z
   .string()
   .min(1)
@@ -109,11 +109,11 @@ export type ModelAlias = z.infer<typeof ModelAliasSchema>;
 export const KnowledgeBaseSchema = z
   .object({
     // Where the user's forked KB lives — populated by `vcf init` from the
-    // @vcf/kb package in node_modules.
+    // @kaelith-labs/kb package in node_modules.
     root: AbsolutePathSchema,
     // Optional upstream pin, used by `vcf update-primers` to know which KB
     // version to diff against.
-    upstream_package: z.string().default("@vcf/kb"),
+    upstream_package: z.string().default("@kaelith-labs/kb"),
   })
   .strict();
 

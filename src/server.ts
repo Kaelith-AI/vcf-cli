@@ -70,7 +70,7 @@ export interface ServerDescribe {
 
 export function describeServer(scope: Scope): ServerDescribe {
   return {
-    name: "@vcf/cli",
+    name: "@kaelith-labs/cli",
     version: VERSION,
     mcpSpec: MCP_SPEC_VERSION,
     scope,

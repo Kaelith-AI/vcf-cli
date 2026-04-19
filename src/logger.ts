@@ -13,7 +13,7 @@ const destination = pino.destination({ dest: 2, sync: false });
 export const log = pino(
   {
     level: process.env.VCF_LOG_LEVEL ?? "info",
-    base: { pkg: "@vcf/cli" },
+    base: { pkg: "@kaelith-labs/cli" },
     timestamp: pino.stdTimeFunctions.isoTime,
   },
   destination,

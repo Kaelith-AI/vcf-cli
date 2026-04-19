@@ -5,7 +5,7 @@ import { VERSION, MCP_SPEC_VERSION } from "../src/version.js";
 describe("M0 smoke", () => {
   it("describeServer reports scope + pinned versions", () => {
     const info = describeServer("global");
-    expect(info.name).toBe("@vcf/cli");
+    expect(info.name).toBe("@kaelith-labs/cli");
     expect(info.version).toBe(VERSION);
     expect(info.mcpSpec).toBe(MCP_SPEC_VERSION);
     expect(info.scope).toBe("global");

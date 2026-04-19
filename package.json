@@ -1,5 +1,5 @@
 {
-  "name": "@vcf/cli",
+  "name": "@kaelith-labs/cli",
   "version": "0.0.1-alpha.0",
   "description": "Vibe Coding Framework MCP server + CLI — LLM-agnostic lifecycle tooling (capture, spec, plan, build, test, review, ship).",
   "type": "module",
@@ -47,10 +47,10 @@
     "zod-to-json-schema": "^3.24.0"
   },
   "peerDependencies": {
-    "@vcf/kb": ">=0.0.1-alpha <0.2.0"
+    "@kaelith-labs/kb": ">=0.0.1-alpha <0.2.0"
   },
   "peerDependenciesMeta": {
-    "@vcf/kb": {
+    "@kaelith-labs/kb": {
       "optional": true
     }
   },

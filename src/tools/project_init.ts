@@ -176,7 +176,7 @@ export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
         const mcpJsonPath = join(target, ".mcp.json");
         const mcpBlock = {
           command: "npx",
-          args: ["-y", "@vcf/cli", "vcf-mcp", "--scope", "project"],
+          args: ["-y", "@kaelith-labs/cli", "vcf-mcp", "--scope", "project"],
           env: { VCF_CONFIG: "${HOME}/.vcf/config.yaml" },
         };
         let mcpMerged = false;

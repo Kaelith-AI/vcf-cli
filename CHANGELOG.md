@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `@vcf/cli` are documented here.
+All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
@@ -10,7 +10,7 @@ Initial alpha. All 13 milestones of the VCF-MCP MVP plan landed.
 
 ### Added
 
-- **Server + CLI** (`@vcf/cli`) with dual bins (`vcf`, `vcf-mcp`), ESM,
+- **Server + CLI** (`@kaelith-labs/cli`) with dual bins (`vcf`, `vcf-mcp`), ESM,
   Node ≥ 20, Apache-2.0.
 - **Two-scope MCP surface**: global (idea_capture/search/get,
   spec_template/save/get/suggest_primers, project_init, config_get,
@@ -28,7 +28,7 @@ Initial alpha. All 13 milestones of the VCF-MCP MVP plan landed.
 - **`vcf` maintenance CLI**: init, reindex, verify, register-endpoint,
   stale-check, update-primers, install-skills, admin audit.
 - **Claude Code skill pack** (15 skills) + `vcf install-skills claude-code`.
-- **Full KB corpus** via `@vcf/kb` peer dep: 25 primers, 41 best-practices,
+- **Full KB corpus** via `@kaelith-labs/kb` peer dep: 25 primers, 41 best-practices,
   21 lenses, 27 review stages, 3 reviewer configs, 2 standards.
 - **Opt-in error reporting** (default off, user-prompted on `vcf init`).
 - **Append-only audit** with sha256-of-redacted hashing of every tool

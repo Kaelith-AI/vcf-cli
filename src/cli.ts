@@ -11,7 +11,7 @@
 //   vcf verify                      — config + allowed_roots + KB + hooks health check
 //   vcf register-endpoint --name ... — append a new endpoint block to config.yaml
 //   vcf stale-check                 — flag primers past review.stale_primer_days
-//   vcf update-primers              — fetch latest @vcf/kb; diff + warn on conflicts
+//   vcf update-primers              — fetch latest @kaelith-labs/kb; diff + warn on conflicts
 //   vcf admin audit [--tool ...]    — query the audit trail
 
 import { Command } from "commander";
@@ -97,7 +97,7 @@ async function runInit(): Promise<void> {
   // User-level .mcp.json auto-wire for --scope global.
   const globalBlock = {
     command: "npx",
-    args: ["-y", "@vcf/cli", "vcf-mcp", "--scope", "global"],
+    args: ["-y", "@kaelith-labs/cli", "vcf-mcp", "--scope", "global"],
     env: { VCF_CONFIG: `${homedir()}/.vcf/config.yaml` },
   };
   if (existsSync(userMcpJsonPath)) {
@@ -425,7 +425,7 @@ async function runInstallSkills(client: string, opts: { dest?: string }): Promis
 async function runUpdatePrimers(): Promise<void> {
   const config = await loadConfigOrExit();
   const kbRoot = config.kb.root;
-  // Locate the installed @vcf/kb package. In dev we prefer a sibling repo;
+  // Locate the installed @kaelith-labs/kb package. In dev we prefer a sibling repo;
   // in production we resolve via Node's module resolution from the CLI's
   // own node_modules (best-effort — if require.resolve fails we fall back).
   let upstreamRoot: string | null = null;
@@ -448,7 +448,7 @@ async function runUpdatePrimers(): Promise<void> {
   }
   if (upstreamRoot === null) {
     err(
-      "could not locate @vcf/kb package; ensure it's installed or the sibling repo is present",
+      "could not locate @kaelith-labs/kb package; ensure it's installed or the sibling repo is present",
       6,
     );
   }
@@ -678,7 +678,7 @@ program
 program
   .command("update-primers")
   .description(
-    "Pull latest @vcf/kb into the user's KB root; warn+skip on conflicts (three-way merge is Phase 2).",
+    "Pull latest @kaelith-labs/kb into the user's KB root; warn+skip on conflicts (three-way merge is Phase 2).",
   )
   .action(async () => {
     try {

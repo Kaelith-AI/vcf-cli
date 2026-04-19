@@ -1,4 +1,4 @@
-// Flat-config ESLint for the @vcf/cli package.
+// Flat-config ESLint for the @kaelith-labs/cli package.
 // Strict TS rules; imports must be explicit; console.log is banned (all logs go to stderr via pino).
 import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
