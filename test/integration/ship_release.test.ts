@@ -40,8 +40,8 @@ describe("ship_release plan/confirm contract", () => {
     __resetShipReleaseStoreForTests();
   });
   afterEach(async () => {
-    await rm(workRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await rm(workRoot, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
+    await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
   });
 
   async function connectProject() {

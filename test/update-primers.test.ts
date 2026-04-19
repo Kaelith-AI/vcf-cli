@@ -28,7 +28,7 @@ describe("update-primers three-way merge", () => {
   });
 
   afterEach(async () => {
-    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await rm(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
   });
 
   it("adds upstream files that have no local counterpart", async () => {

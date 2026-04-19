@@ -41,8 +41,8 @@ describe("M12 fuzz: every tool rejects malformed input safely", () => {
     home = await realpath(await mkdtemp(join(tmpdir(), "vcf-m12h-")));
   });
   afterEach(async () => {
-    await rm(workRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await rm(workRoot, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
+    await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
   });
 
   function makeConfig() {

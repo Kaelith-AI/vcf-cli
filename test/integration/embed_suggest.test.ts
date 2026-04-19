@@ -76,8 +76,8 @@ describe("spec_suggest_primers — blended scoring with embeddings", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
-    await rm(workRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await rm(workRoot, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
+    await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
   });
 
   function makeConfig(embeddings?: {

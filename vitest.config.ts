@@ -7,6 +7,10 @@ export default defineConfig({
     clearMocks: true,
     restoreMocks: true,
     testTimeout: 10_000,
+    // Windows holds exclusive locks on open SQLite files; afterEach
+    // cleanup can need several seconds of rm retries before handles
+    // release. 30s gives comfortable headroom without masking real hangs.
+    hookTimeout: 30_000,
     // better-sqlite3's native bindings + the MCP SDK's in-memory transport
     // do not play well with vitest's default worker pool; concurrent workers
     // can wedge on SIGTERM. A single forked process is plenty fast for this
