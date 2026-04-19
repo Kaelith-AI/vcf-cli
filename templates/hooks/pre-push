@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# VCF-MCP pre-push hook — secret-scan + uncommitted-artifact warning.
+# Run gitleaks if installed; warn if plans/ has uncommitted changes that
+# probably ought to be committed before the push.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Uncommitted-artifact warning (non-fatal).
+if git -C "$REPO_ROOT" diff --quiet -- plans/ memory/ 2>/dev/null; then
+  :
+else
+  echo "pre-push: warning — uncommitted changes under plans/ or memory/" >&2
+fi
+
+# Gitleaks (fatal if found).
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks detect --redact --no-banner --exit-code 1 --source "$REPO_ROOT" || {
+    echo "pre-push: gitleaks found secrets — push aborted" >&2
+    exit 1
+  }
+else
+  echo "pre-push: gitleaks not installed — skipping secret scan" >&2
+fi

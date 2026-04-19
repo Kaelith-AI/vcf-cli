@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# VCF-MCP post-commit hook — appends the latest commit to today's daily log.
+# The daily log lives at memory/daily-logs/YYYY-MM-DD.md; created on first
+# commit of the day.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+DATE="$(date +%Y-%m-%d)"
+LOG_DIR="$REPO_ROOT/memory/daily-logs"
+LOG_FILE="$LOG_DIR/$DATE.md"
+
+mkdir -p "$LOG_DIR"
+
+# Initialize the file if it's new.
+if [ ! -f "$LOG_FILE" ]; then
+  cat > "$LOG_FILE" <<EOF
+---
+date: $DATE
+commits: []
+---
+
+# Daily Log — $DATE
+
+## Notes
+
+-
+
+## Hook-managed commits
+
+<!-- post-commit hook appends entries below this line -->
+EOF
+fi
+
+SHA="$(git rev-parse --short HEAD)"
+SUBJECT="$(git log -1 --pretty=%s)"
+
+printf -- "- %s — %s\n" "$SHA" "$SUBJECT" >> "$LOG_FILE"
