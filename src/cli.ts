@@ -261,6 +261,46 @@ async function runVerify(opts: { format?: string } = {}): Promise<void> {
       findings.push({ section: "kb", level: "error", detail: (e as Error).message });
     }
 
+    // Each registered KB pack: does its root exist, and does the kb/
+    // subdir have any entries?
+    for (const pack of config.kb.packs) {
+      try {
+        const st = statSync(pack.root);
+        if (!st.isDirectory()) {
+          findings.push({
+            section: "kb-packs",
+            level: "error",
+            detail: `pack '${pack.name}' root ${pack.root} is not a directory`,
+          });
+          continue;
+        }
+        const packKb = join(pack.root, "kb");
+        if (!existsSync(packKb)) {
+          findings.push({
+            section: "kb-packs",
+            level: "warn",
+            detail: `pack '${pack.name}' has no kb/ subdir at ${packKb} — entries will be empty`,
+          });
+          continue;
+        }
+        const packEntries = await loadKb(packKb);
+        findings.push({
+          section: "kb-packs",
+          level: packEntries.length > 0 ? "ok" : "warn",
+          detail:
+            packEntries.length > 0
+              ? `pack '${pack.name}' has ${packEntries.length} entr(y|ies) at ${pack.root}`
+              : `pack '${pack.name}' is empty at ${pack.root}`,
+        });
+      } catch (e) {
+        findings.push({
+          section: "kb-packs",
+          level: "error",
+          detail: `pack '${pack.name}' at ${pack.root}: ${(e as Error).message}`,
+        });
+      }
+    }
+
     // Endpoint env vars present (non-fatal; note only).
     for (const e of config.endpoints) {
       if (e.auth_env_var === undefined) continue;

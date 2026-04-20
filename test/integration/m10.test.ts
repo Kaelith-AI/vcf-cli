@@ -156,8 +156,8 @@ describe("M10 vcf CLI", () => {
       env: { VCF_CONFIG: cfg, HOME: home },
     });
     expect(res.status).toBe(0);
-    // Empty audit DB prints []\n
-    expect(res.stderr.trim()).toBe("[]");
+    // Empty audit DB prints [] on stdout so `| jq` works.
+    expect(res.stdout.trim()).toBe("[]");
   });
 
   it("vcf install-skills claude-code copies every shipped skill with Claude /foo invocation", async () => {
