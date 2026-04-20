@@ -202,7 +202,7 @@ interface VerifyFinding {
   detail: string;
 }
 
-async function runVerify(): Promise<void> {
+async function runVerify(opts: { format?: string } = {}): Promise<void> {
   const findings: VerifyFinding[] = [];
 
   // Config loads.
@@ -304,15 +304,22 @@ async function runVerify(): Promise<void> {
   }
 
   // Render.
-  let errs = 0;
-  for (const f of findings) {
-    process.stderr.write(`  [${f.level.toUpperCase().padEnd(5)}] ${f.section}: ${f.detail}\n`);
-    if (f.level === "error") errs++;
+  const errs = findings.filter((f) => f.level === "error").length;
+  const warns = findings.filter((f) => f.level === "warn").length;
+  if (opts.format === "json") {
+    // Structured output for automation (n8n, cron, CI). stdout, not stderr,
+    // so pipelines can `| jq` cleanly. Non-zero exit on any error-level
+    // finding stays in place.
+    process.stdout.write(JSON.stringify({ ok: errs === 0, errs, warns, findings }, null, 2) + "\n");
+  } else {
+    for (const f of findings) {
+      process.stderr.write(`  [${f.level.toUpperCase().padEnd(5)}] ${f.section}: ${f.detail}\n`);
+    }
   }
   if (errs > 0) {
     err(`verify failed: ${errs} error(s)`, 3);
   }
-  log("verify ok");
+  if (opts.format !== "json") log("verify ok");
 }
 
 // ---- vcf register-endpoint -------------------------------------------------
@@ -359,29 +366,151 @@ async function runRegisterEndpoint(opts: {
 
 // ---- vcf stale-check -------------------------------------------------------
 
-async function runStaleCheck(): Promise<void> {
+interface StaleRecord {
+  id: string;
+  pack?: string;
+  days_old: number;
+  updated: string;
+  path: string;
+}
+
+async function runStaleCheck(opts: { format?: string } = {}): Promise<void> {
   const config = await loadConfigOrExit();
   const entries = await loadKb(config.kb.root, config.kb.packs);
   const thresholdMs = config.review.stale_primer_days * 86_400_000;
   const now = Date.now();
-  let stale = 0;
+  const stale: StaleRecord[] = [];
+  const undated: string[] = [];
   for (const e of entries) {
     const when = e.last_reviewed ?? e.updated;
     if (!when) {
-      process.stderr.write(`  [WARN] ${e.id}: no last_reviewed / updated frontmatter\n`);
+      undated.push(e.id);
       continue;
     }
     const ts = Date.parse(when);
     if (!Number.isFinite(ts)) continue;
     if (now - ts > thresholdMs) {
       const daysOld = Math.floor((now - ts) / 86_400_000);
-      process.stderr.write(`  [STALE] ${e.id}: ${daysOld} days old (updated=${when})\n`);
-      stale++;
+      const rec: StaleRecord = {
+        id: e.id,
+        days_old: daysOld,
+        updated: when,
+        path: e.path,
+      };
+      if (e.pack !== undefined) rec.pack = e.pack;
+      stale.push(rec);
     }
   }
+  if (opts.format === "json") {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          threshold_days: config.review.stale_primer_days,
+          total: entries.length,
+          stale_count: stale.length,
+          undated_count: undated.length,
+          stale,
+          undated,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return;
+  }
+  for (const id of undated) {
+    process.stderr.write(`  [WARN] ${id}: no last_reviewed / updated frontmatter\n`);
+  }
+  for (const r of stale) {
+    process.stderr.write(`  [STALE] ${r.id}: ${r.days_old} days old (updated=${r.updated})\n`);
+  }
   log(
-    `stale-check: ${stale} stale / ${entries.length} total (threshold ${config.review.stale_primer_days}d)`,
+    `stale-check: ${stale.length} stale / ${entries.length} total (threshold ${config.review.stale_primer_days}d)`,
   );
+}
+
+// ---- vcf health -----------------------------------------------------------
+//
+// Ping each configured endpoint and report reachability. Designed for
+// scheduled automation: `--format json` emits a structured report for
+// n8n / cron / CI; default text mode is operator-readable.
+//
+// The probe is deliberately tiny: HEAD the base_url (OpenAI-compatible
+// servers almost always respond to it even without auth), fall back to
+// GET on 405/501. Any 2xx or 4xx response counts as "reachable" — 4xx
+// from `/v1/` is expected when you haven't authenticated. 5xx / network
+// errors / timeouts count as unreachable.
+
+interface HealthResult {
+  name: string;
+  base_url: string;
+  reachable: boolean;
+  status?: number;
+  duration_ms: number;
+  error?: string;
+}
+
+async function pingEndpoint(url: string, timeoutMs: number): Promise<number | string> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    let res = await fetch(url, { method: "HEAD", signal: ctrl.signal });
+    if (res.status === 405 || res.status === 501) {
+      res = await fetch(url, { method: "GET", signal: ctrl.signal });
+    }
+    return res.status;
+  } catch (e) {
+    const err = e as Error;
+    if (err.name === "AbortError") return "timeout";
+    return err.message || "unknown";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runHealth(opts: { format?: string; timeoutMs?: number } = {}): Promise<void> {
+  const config = await loadConfigOrExit();
+  const timeout = opts.timeoutMs ?? 5000;
+  const results: HealthResult[] = [];
+  for (const ep of config.endpoints) {
+    const startedAt = Date.now();
+    const probe = await pingEndpoint(ep.base_url, timeout);
+    const duration = Date.now() - startedAt;
+    const result: HealthResult = {
+      name: ep.name,
+      base_url: ep.base_url,
+      reachable: typeof probe === "number" && probe < 500,
+      duration_ms: duration,
+    };
+    if (typeof probe === "number") result.status = probe;
+    else result.error = probe;
+    results.push(result);
+  }
+  const unreachable = results.filter((r) => !r.reachable);
+  if (opts.format === "json") {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          ok: unreachable.length === 0,
+          total: results.length,
+          unreachable_count: unreachable.length,
+          endpoints: results,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+  } else {
+    for (const r of results) {
+      const tag = r.reachable ? "OK" : "DOWN";
+      const detail = r.reachable
+        ? `HTTP ${r.status} (${r.duration_ms}ms)`
+        : `${r.error ?? `HTTP ${r.status ?? "?"}`} (${r.duration_ms}ms)`;
+      process.stderr.write(`  [${tag.padEnd(4)}] ${r.name.padEnd(20)} ${r.base_url}  ${detail}\n`);
+    }
+    log(`health: ${unreachable.length} unreachable / ${results.length} total`);
+  }
+  if (unreachable.length > 0) process.exit(9);
 }
 
 // ---- vcf pack (add / list / remove) ---------------------------------------
@@ -951,12 +1080,14 @@ async function runAdminAudit(opts: {
   }>;
 
   if (opts.format === "json") {
-    process.stderr.write(JSON.stringify(rows, null, 2) + "\n");
+    // stdout so `vcf admin audit --format json | jq` works. The CLI is not
+    // the MCP stdio transport (that's src/mcp.ts).
+    process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
   } else if (opts.format === "csv") {
     const header = opts.full
       ? "id,ts,tool,scope,project_root,client_id,inputs_hash,outputs_hash,endpoint,result_code,inputs_json,outputs_json\n"
       : "id,ts,tool,scope,project_root,client_id,inputs_hash,outputs_hash,endpoint,result_code\n";
-    process.stderr.write(header);
+    process.stdout.write(header);
     for (const r of rows) {
       const base = [
         r.id,
@@ -973,7 +1104,7 @@ async function runAdminAudit(opts: {
       const full = opts.full
         ? [csvEscape(r.inputs_json ?? ""), csvEscape(r.outputs_json ?? "")]
         : [];
-      process.stderr.write([...base, ...full].join(",") + "\n");
+      process.stdout.write([...base, ...full].join(",") + "\n");
     }
   } else {
     // table
@@ -1043,9 +1174,23 @@ program
 program
   .command("verify")
   .description("Check config, allowed_roots, KB, endpoint env vars, git hooks.")
-  .action(async () => {
+  .option("--format <fmt>", "text (default) | json", "text")
+  .action(async (opts: { format?: string }) => {
     try {
-      await runVerify();
+      await runVerify(opts);
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+program
+  .command("health")
+  .description("Ping each configured endpoint and report reachability. Exits 9 if any unreachable.")
+  .option("--format <fmt>", "text (default) | json", "text")
+  .option("--timeout-ms <ms>", "per-endpoint HTTP timeout", (v) => parseInt(v, 10), 5000)
+  .action(async (opts: { format?: string; timeoutMs?: number }) => {
+    try {
+      await runHealth(opts);
     } catch (e) {
       err((e as Error).message);
     }
@@ -1078,9 +1223,10 @@ program
 program
   .command("stale-check")
   .description("Flag KB entries past review.stale_primer_days old.")
-  .action(async () => {
+  .option("--format <fmt>", "text (default) | json", "text")
+  .action(async (opts: { format?: string }) => {
     try {
-      await runStaleCheck();
+      await runStaleCheck(opts);
     } catch (e) {
       err((e as Error).message);
     }

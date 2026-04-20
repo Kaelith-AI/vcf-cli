@@ -4,6 +4,37 @@ All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
+## [Unreleased]
+
+### Added
+
+- **KB plugin protocol** — `config.kb.packs: [{name, root}]` registers
+  third-party primer packs. Loader walks each pack's `<root>/kb/` and
+  tags entries with `pack=<name>`; IDs are namespaced `@<name>/...` so
+  pack content can never shadow main-KB files. `vcf pack add/list/remove`
+  manage the registry. `primer_list` surfaces the `pack` field.
+- **`vcf health` command** — probes each configured endpoint (HEAD,
+  falls back to GET on 405/501) with a 5s default timeout, reports
+  reachability. Exits 9 if any endpoint is down. `--format json` for
+  automation pipelines.
+- **`--format json` on `vcf verify` and `vcf stale-check`** — structured
+  output on stdout (not stderr) so reports pipe cleanly into `jq` /
+  n8n / cron scripts. `admin audit --format json` was also switched
+  from stderr to stdout (latent bug — it was unpipe-able).
+- **n8n workflow templates** under `packaging/n8n/workflows/`: weekly
+  stale-check, hourly endpoint health, weekly KB-update notification.
+  Each is a ready-to-import JSON with a Slack webhook placeholder; see
+  `packaging/n8n/README.md` for the import walkthrough and cron
+  equivalents for users not running n8n.
+
+### Fixed
+
+- **`ship_release`** now enforces `timeout_ms` (default 60s, max 10 min)
+  on the `gh` subprocess. Previously the spawn had no timeout, which
+  on Linux CI failed fast with auth errors but on Windows Node 22 CI
+  hung indefinitely. Real users get the same protection — a hung `gh`
+  can't leak the handler forever.
+
 ## [0.1.0-alpha.0] — 2026-04-19
 
 Milestone release rolling up the Phase-2 wave: server-side LLM review,

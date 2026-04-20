@@ -1,0 +1,82 @@
+{
+  "name": "VCF — Weekly Stale Primer Check",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * MON"
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Every Monday 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "vcf stale-check --format json"
+      },
+      "id": "run-vcf",
+      "name": "Run vcf stale-check",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.stdout;\nconst report = JSON.parse(raw);\nreturn [{ json: report }];"
+      },
+      "id": "parse",
+      "name": "Parse JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.stale_count }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ]
+        }
+      },
+      "id": "gate",
+      "name": "Any stale?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "REPLACE_WITH_YOUR_SLACK_WEBHOOK_URL",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"*VCF stale-check* — {{ $json.stale_count }} primer(s) past {{ $json.threshold_days }}-day threshold. Top offenders: {{ $json.stale.slice(0, 3).map(s => `${s.id} (${s.days_old}d)`).join(', ') }}\"\n}"
+      },
+      "id": "notify",
+      "name": "Slack Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 200]
+    }
+  ],
+  "connections": {
+    "Every Monday 09:00": {
+      "main": [[{ "node": "Run vcf stale-check", "type": "main", "index": 0 }]]
+    },
+    "Run vcf stale-check": { "main": [[{ "node": "Parse JSON", "type": "main", "index": 0 }]] },
+    "Parse JSON": { "main": [[{ "node": "Any stale?", "type": "main", "index": 0 }]] },
+    "Any stale?": { "main": [[{ "node": "Slack Notify", "type": "main", "index": 0 }], []] }
+  }
+}

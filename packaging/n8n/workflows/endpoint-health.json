@@ -1,0 +1,80 @@
+{
+  "name": "VCF — Hourly Endpoint Health",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "vcf health --format json --timeout-ms 5000 || true"
+      },
+      "id": "run-vcf",
+      "name": "Run vcf health",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.stdout;\nconst report = JSON.parse(raw);\nreturn [{ json: report }];"
+      },
+      "id": "parse",
+      "name": "Parse JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.unreachable_count }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ]
+        }
+      },
+      "id": "gate",
+      "name": "Any down?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "REPLACE_WITH_YOUR_SLACK_WEBHOOK_URL",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"*VCF endpoint alert* — {{ $json.unreachable_count }} endpoint(s) unreachable: {{ $json.endpoints.filter(e => !e.reachable).map(e => `${e.name} (${e.error || ('HTTP ' + e.status)})`).join(', ') }}\"\n}"
+      },
+      "id": "notify",
+      "name": "Slack Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 200]
+    }
+  ],
+  "connections": {
+    "Every Hour": { "main": [[{ "node": "Run vcf health", "type": "main", "index": 0 }]] },
+    "Run vcf health": { "main": [[{ "node": "Parse JSON", "type": "main", "index": 0 }]] },
+    "Parse JSON": { "main": [[{ "node": "Any down?", "type": "main", "index": 0 }]] },
+    "Any down?": { "main": [[{ "node": "Slack Notify", "type": "main", "index": 0 }], []] }
+  }
+}

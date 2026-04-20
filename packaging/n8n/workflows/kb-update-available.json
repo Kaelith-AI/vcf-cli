@@ -1,0 +1,101 @@
+{
+  "name": "VCF — Weekly KB Update Check",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * MON"
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Every Monday 10:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://registry.npmjs.org/@kaelith-labs/kb",
+        "responseFormat": "json"
+      },
+      "id": "fetch-npm",
+      "name": "Fetch npm registry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "command": "cat $HOME/.vcf/kb/package.json 2>/dev/null || echo '{\"version\":\"unknown\"}'"
+      },
+      "id": "read-local",
+      "name": "Read local KB version",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [460, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "const latest = $('Fetch npm registry').first().json['dist-tags']?.alpha\n  || $('Fetch npm registry').first().json['dist-tags']?.latest;\nconst localRaw = $('Read local KB version').first().json.stdout;\nconst local = JSON.parse(localRaw).version;\nreturn [{ json: { latest, local, update_available: latest !== local } }];"
+      },
+      "id": "diff",
+      "name": "Diff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.update_available }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ]
+        }
+      },
+      "id": "gate",
+      "name": "Update available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [980, 380]
+    },
+    {
+      "parameters": {
+        "url": "REPLACE_WITH_YOUR_SLACK_WEBHOOK_URL",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"*VCF KB update* — @kaelith-labs/kb {{ $json.latest }} is out (local: {{ $json.local }}). Run `vcf update-primers` to pick it up.\"\n}"
+      },
+      "id": "notify",
+      "name": "Slack Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 280]
+    }
+  ],
+  "connections": {
+    "Every Monday 10:00": {
+      "main": [
+        [
+          { "node": "Fetch npm registry", "type": "main", "index": 0 },
+          { "node": "Read local KB version", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read local KB version": { "main": [[{ "node": "Diff", "type": "main", "index": 0 }]] },
+    "Fetch npm registry": { "main": [[{ "node": "Diff", "type": "main", "index": 0 }]] },
+    "Diff": { "main": [[{ "node": "Update available?", "type": "main", "index": 0 }]] },
+    "Update available?": {
+      "main": [[{ "node": "Slack Notify", "type": "main", "index": 0 }], []]
+    }
+  }
+}
