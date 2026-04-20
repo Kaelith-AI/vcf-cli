@@ -234,7 +234,13 @@ function readProjectRoot(deps: ServerDeps): string | null {
 }
 
 function isoCompactNow(): string {
-  return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "").replace(/Z$/, "Z");
+  // Millisecond resolution in the run id — two re-prepares in the same
+  // second must not collide on INSERT (review_runs.id is unique). Keeps
+  // the format filesystem-safe: YYYYMMDDTHHMMSSmmmZ.
+  return new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.(\d{3})Z$/, "$1Z");
 }
 
 async function copyStageFile(

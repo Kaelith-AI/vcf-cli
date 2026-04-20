@@ -463,5 +463,48 @@ describe("e2e: full lifecycle", () => {
     expect(runs.length).toBe(2);
     expect(runs[0]).toMatchObject({ stage: 1, status: "submitted", verdict: "PASS" });
     expect(runs[1]).toMatchObject({ stage: 2, status: "pending" });
+
+    // ---- audit parity (M12 spec §Verification bullet 5) ----
+    // Every tool call above must have emitted exactly one audit row, in
+    // invocation order, tagged with the scope and an ok/E_* result code.
+    // The global DB owns audit for both scopes, so we can read the whole
+    // sequence from the same handle project_init registered.
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    const auditRows = globalDb
+      .prepare(
+        "SELECT tool, scope, result_code, inputs_hash, outputs_hash FROM audit ORDER BY ts, rowid",
+      )
+      .all() as Array<{
+      tool: string;
+      scope: string;
+      result_code: string;
+      inputs_hash: string;
+      outputs_hash: string;
+    }>;
+    const sequence = auditRows.map((r) => `${r.scope}:${r.tool}:${r.result_code}`);
+    expect(sequence).toEqual([
+      "global:idea_capture:ok",
+      "global:spec_save:ok",
+      "global:project_init:ok",
+      "project:plan_context:ok",
+      "project:plan_save:ok",
+      "project:build_context:ok",
+      "project:decision_log_add:ok",
+      "project:test_execute:ok",
+      "project:test_analyze:ok",
+      "project:review_prepare:ok",
+      "project:review_submit:ok",
+      "project:response_log_add:ok",
+      "project:review_prepare:ok",
+      "project:ship_audit:ok",
+      "project:ship_release:ok",
+    ]);
+    // Hash columns must be populated for every row (redact-before-hash
+    // contract) — this catches regressions where a tool forgets to pass
+    // inputs/outputs through the audit hook.
+    for (const row of auditRows) {
+      expect(row.inputs_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(row.outputs_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    }
   });
 });

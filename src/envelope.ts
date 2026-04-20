@@ -102,15 +102,31 @@ export function wrapResult<TContent = unknown>(payload: EnvelopePayload<TContent
  * into a failure envelope, and return the wrapped SDK result. Tool handlers
  * should use this instead of their own try/catch so the error-code surface
  * is uniform.
+ *
+ * Optional `onComplete` runs after the final payload is known, on both the
+ * success and failure paths. This is the hook tools should use for audit
+ * writes so the "one audit row per tool call" invariant holds on sad-path
+ * flows (E_CANCELED, E_STATE_INVALID, Zod validation failures) — the body
+ * often throws before its own audit write runs, and a `.catch()` *after*
+ * runTool is unreachable because runTool already swallows the error.
  */
 export async function runTool<TContent = unknown>(
   body: () => Promise<EnvelopePayload<TContent>>,
+  onComplete?: (payload: EnvelopePayload<TContent>) => void,
 ): Promise<CallToolResult> {
+  let payload: EnvelopePayload<TContent>;
   try {
-    const payload = await body();
-    return wrapResult(payload);
+    payload = await body();
   } catch (err) {
     const mcp = toMcpError(err);
-    return wrapResult(failure(mcp.code, mcp.message, mcp.detail));
+    payload = failure(mcp.code, mcp.message, mcp.detail);
   }
+  if (onComplete) {
+    try {
+      onComplete(payload);
+    } catch {
+      /* audit / telemetry failures are non-fatal */
+    }
+  }
+  return wrapResult(payload);
 }
