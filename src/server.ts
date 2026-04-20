@@ -52,6 +52,7 @@ import {
   registerEndpointList,
   registerModelList,
   registerPrimerList,
+  registerPackList,
 } from "./tools/catalog.js";
 
 export interface ServerDeps {
@@ -185,6 +186,7 @@ export function createServer(deps: ServerDeps): McpServer {
   registerEndpointList(server, deps);
   registerModelList(server, deps);
   registerPrimerList(server, deps);
+  registerPackList(server, deps);
 
   return server;
 }

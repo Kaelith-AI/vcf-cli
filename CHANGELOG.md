@@ -12,7 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   third-party primer packs. Loader walks each pack's `<root>/kb/` and
   tags entries with `pack=<name>`; IDs are namespaced `@<name>/...` so
   pack content can never shadow main-KB files. `vcf pack add/list/remove`
-  manage the registry. `primer_list` surfaces the `pack` field.
+  manage the registry. `primer_list` surfaces the `pack` field. New
+  **`pack_list` MCP tool** (global scope) returns name + root + entry
+  count per pack — lets agents discover the extension surface. `vcf
+  verify` gained a `kb-packs` section that checks each pack root exists.
 - **`vcf health` command** — probes each configured endpoint (HEAD,
   falls back to GET on 405/501) with a 5s default timeout, reports
   reachability. Exits 9 if any endpoint is down. `--format json` for
@@ -26,6 +29,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Each is a ready-to-import JSON with a Slack webhook placeholder; see
   `packaging/n8n/README.md` for the import walkthrough and cron
   equivalents for users not running n8n.
+
+### Changed
+
+- **`vcf init` seed config** now writes a commented template including
+  `kb.packs: []`, explicit `review:` block, `audit.full_payload_storage`,
+  and a commented-out `embeddings:` block. Easier for new users to see
+  what knobs exist without reading the schema source.
 
 ### Fixed
 

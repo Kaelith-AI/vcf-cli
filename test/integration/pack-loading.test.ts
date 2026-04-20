@@ -167,4 +167,27 @@ describe("KB plugin protocol: third-party packs via config.kb.packs", () => {
     // the "mcp" tag; both should match.
     expect(entries.map((e) => e.id).sort()).toEqual(["@acme/primers/mcp", "primers/mcp"]);
   });
+
+  it("pack_list surfaces each registered pack with an entry count", async () => {
+    const { client } = await connectGlobal([{ name: "acme", root: packRoot }]);
+    const env = parseResult(
+      await client.callTool({ name: "pack_list", arguments: { expand: true } }),
+    );
+    expect(env.ok).toBe(true);
+    const packs = (env.content as { packs: Array<{ name: string; entry_count: number }> }).packs;
+    expect(packs).toHaveLength(1);
+    expect(packs[0]?.name).toBe("acme");
+    // Pack has two files: primers/mcp.md + best-practices/agile.md.
+    expect(packs[0]?.entry_count).toBe(2);
+  });
+
+  it("pack_list returns empty list when no packs are registered", async () => {
+    const { client } = await connectGlobal([]);
+    const env = parseResult(
+      await client.callTool({ name: "pack_list", arguments: { expand: true } }),
+    );
+    expect(env.ok).toBe(true);
+    const packs = (env.content as { packs: unknown[] }).packs;
+    expect(packs).toEqual([]);
+  });
 });

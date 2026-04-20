@@ -275,3 +275,55 @@ export function registerPrimerList(server: McpServer, deps: ServerDeps): void {
     },
   );
 }
+
+// ---- pack_list -------------------------------------------------------------
+
+const PackListInput = z
+  .object({
+    expand: z.boolean().default(true),
+  })
+  .strict();
+
+export function registerPackList(server: McpServer, deps: ServerDeps): void {
+  server.registerTool(
+    "pack_list",
+    {
+      title: "List Registered KB Packs",
+      description:
+        "Return the name + root + entry count of each third-party KB pack registered in config.kb.packs. Pack content is accessible via primer_list filtered by id prefix '@<name>/'.",
+      inputSchema: PackListInput.shape,
+    },
+    async (args: z.infer<typeof PackListInput>) => {
+      return runTool(async () => {
+        const parsed = PackListInput.parse(args);
+        const all = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
+        const byPack = new Map<string, number>();
+        for (const e of all) if (e.pack) byPack.set(e.pack, (byPack.get(e.pack) ?? 0) + 1);
+        const rows = deps.config.kb.packs.map((p) => ({
+          name: p.name,
+          root: p.root,
+          entry_count: byPack.get(p.name) ?? 0,
+        }));
+        const payload = success(
+          rows.map((r) => r.root),
+          `pack_list: ${rows.length} pack(s) registered, ${rows.reduce((n, r) => n + r.entry_count, 0)} entr(y|ies) total.`,
+          parsed.expand
+            ? { content: { packs: rows } }
+            : { expand_hint: "Call pack_list with expand=true for the full array." },
+        );
+        try {
+          writeAudit(deps.globalDb, {
+            tool: "pack_list",
+            scope: deps.scope === "project" ? "project" : "global",
+            inputs: parsed,
+            outputs: payload,
+            result_code: "ok",
+          });
+        } catch {
+          /* non-fatal */
+        }
+        return payload;
+      });
+    },
+  );
+}
