@@ -4,7 +4,10 @@ All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
-## [Unreleased]
+## [0.2.0-alpha.0] — 2026-04-20
+
+Phase-3 feature wave. Cross-project visibility, third-party KB
+extensibility, scheduled-automation surface, Windows reliability fix.
 
 ### Added
 
