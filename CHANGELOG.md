@@ -4,6 +4,21 @@ All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
+## [0.3.0] — 2026-04-21
+
+**Drop `alpha` tag.** Four-platform smoke coverage (macOS, Windows ARM64,
+Windows x64, Linux) all green on `0.3.0-alpha.0`. No code changes from that
+cut — only the prerelease suffix is removed and the `latest` dist-tag will
+now advance as releases ship.
+
+### Smoke coverage added in this cut
+
+- `packaging/smoke-tests/smoke-linux.sh` — npm-global install path on Linux,
+  mirrors the macOS/Windows scripts (16 checks, runs in ~3s).
+- Windows x64 validation via a KVM-hosted Win11 25H2 VM. Closes the
+  architecture-gap followup filed alongside the ARM64 smoke: `node:sqlite`
+  works identically on x64 Windows, no native compile.
+
 ## [0.3.0-alpha.0] — 2026-04-21
 
 **Migrate off `better-sqlite3` to `node:sqlite`.** Eliminates every native-addon
