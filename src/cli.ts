@@ -22,6 +22,7 @@ import { existsSync, statSync, realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { VERSION, MCP_SPEC_VERSION } from "./version.js";
 import { loadConfig, ConfigError } from "./config/loader.js";
@@ -31,8 +32,67 @@ import { openProjectDb } from "./db/project.js";
 import { loadKb } from "./primers/load.js";
 
 const DEFAULT_CONFIG_PATH = (): string => resolvePath(homedir(), ".vcf", "config.yaml");
+const DEFAULT_KB_ROOT = (): string => resolvePath(homedir(), ".vcf", "kb");
+const DEFAULT_KB_ANCESTOR_ROOT = (): string => resolvePath(homedir(), ".vcf", "kb-ancestors");
 
 // ---- helpers ---------------------------------------------------------------
+
+/**
+ * Resolve the upstream `@kaelith-labs/kb` package's `kb/` directory.
+ *
+ * Order: VCF_KB_SOURCE env override → monorepo sibling checkout (dev) →
+ * installed package via `require.resolve` (production — handles hoisted
+ * node_modules, nested node_modules, and pnpm store symlinks uniformly).
+ * Returns null if none of those paths resolve to an existing directory.
+ */
+export function resolveUpstreamKbRoot(): string | null {
+  const envOverride = process.env["VCF_KB_SOURCE"];
+  if (envOverride && existsSync(envOverride)) return envOverride;
+
+  const devSibling = resolvePath(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "vcf-kb",
+    "kb",
+  );
+  if (existsSync(devSibling)) return devSibling;
+
+  try {
+    const require = createRequire(import.meta.url);
+    const kbPkg = require.resolve("@kaelith-labs/kb/package.json");
+    const installed = join(dirname(kbPkg), "kb");
+    if (existsSync(installed)) return installed;
+  } catch {
+    // @kaelith-labs/kb is not installed in any resolvable location.
+  }
+  return null;
+}
+
+/**
+ * First-run KB seed. If `kbRoot` does not exist, copy every upstream file
+ * into place and seed the ancestor snapshot so future `vcf update-primers`
+ * runs have a three-way merge base. Idempotent: no-op if `kbRoot` exists.
+ * If the upstream package can't be resolved, warn but do not fail — the
+ * rest of init is still useful, and `vcf update-primers` can recover later.
+ */
+export async function seedKbIfMissing(kbRoot: string, ancestorRoot: string): Promise<void> {
+  if (existsSync(kbRoot)) {
+    log(`${kbRoot} already exists — leaving in place. Run 'vcf update-primers' to refresh.`);
+    return;
+  }
+  const upstreamRoot = resolveUpstreamKbRoot();
+  if (upstreamRoot === null) {
+    log(
+      "warning: @kaelith-labs/kb not found — KB-reading tools will return empty until it's installed or 'vcf update-primers' is run.",
+    );
+    return;
+  }
+  const report = await mergePrimerTree({ kbRoot, upstreamRoot, ancestorRoot });
+  log(
+    `seeded kb: ${report.counts.added} entr(y|ies) from ${upstreamRoot} (ancestor: ${ancestorRoot})`,
+  );
+}
 
 function err(message: string, code = 1): never {
   process.stderr.write(`vcf: ${message}\n`);
@@ -134,6 +194,13 @@ async function runInit(opts: { telemetry?: boolean } = {}): Promise<void> {
     await writeFile(cfgPath, seed, "utf8");
     log(`wrote ${cfgPath}`);
   }
+
+  // Seed the KB on first run. Every KB-reading tool (spec_suggest_primers,
+  // build_context, plan_context, primer_list, review_prepare, ...) degrades
+  // silently to an empty list when ~/.vcf/kb is missing, so a fresh install
+  // would look "working" while returning empty results. Seeding here closes
+  // that onboarding hole. Idempotent — skipped if the dir exists.
+  await seedKbIfMissing(DEFAULT_KB_ROOT(), DEFAULT_KB_ANCESTOR_ROOT());
 
   // User-level .mcp.json auto-wire for --scope global.
   const globalBlock = {
@@ -1130,25 +1197,8 @@ function defaultRunGitMergeFile(
 async function runUpdatePrimers(): Promise<void> {
   const config = await loadConfigOrExit();
   const kbRoot = config.kb.root;
-  const ancestorRoot = resolvePath(homedir(), ".vcf", "kb-ancestors");
-  let upstreamRoot: string | null = null;
-  const candidates = [
-    resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "vcf-kb", "kb"),
-    resolvePath(
-      dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "node_modules",
-      "@kaelith-labs",
-      "kb",
-      "kb",
-    ),
-  ];
-  for (const c of candidates) {
-    if (existsSync(c)) {
-      upstreamRoot = c;
-      break;
-    }
-  }
+  const ancestorRoot = DEFAULT_KB_ANCESTOR_ROOT();
+  const upstreamRoot = resolveUpstreamKbRoot();
   if (upstreamRoot === null) {
     err(
       "could not locate @kaelith-labs/kb package; ensure it's installed or the sibling repo is present",

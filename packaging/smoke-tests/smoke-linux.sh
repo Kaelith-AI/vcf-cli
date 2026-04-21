@@ -160,6 +160,23 @@ check_out "config.yaml has version: 1" \
   'version: ?1' \
   cat "$HOME/.vcf/config.yaml"
 
+# KB seed: followup #5 closure. Without this, every KB-reading tool
+# (spec_suggest_primers, build_context, plan_context, primer_list,
+# review_prepare) silently returns empty on a fresh install.
+check "~/.vcf/kb seeded from @kaelith-labs/kb" test -d "$HOME/.vcf/kb/primers"
+primer_count=$(find "$HOME/.vcf/kb/primers" -name '*.md' 2>/dev/null | wc -l)
+if [[ "$primer_count" -gt 0 ]]; then
+  echo "  [x] ~/.vcf/kb/primers has $primer_count *.md files"
+  PASS=$((PASS+1))
+  RESULTS+=("PASS  ~/.vcf/kb/primers has $primer_count *.md files")
+else
+  echo "  [ ] ~/.vcf/kb/primers has no *.md files (KB seed failed)"
+  FAIL=$((FAIL+1))
+  RESULTS+=("FAIL  ~/.vcf/kb/primers empty")
+fi
+check "~/.vcf/kb-ancestors seeded for three-way merges" \
+  test -d "$HOME/.vcf/kb-ancestors/primers"
+
 perms=$(stat -c '%a' "$HOME/.vcf" 2>/dev/null || echo "???")
 if [[ "$perms" == "700" ]]; then
   echo "  [x] ~/.vcf is user-only (700)"

@@ -4,6 +4,43 @@ All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
+## [0.3.2] — 2026-04-21
+
+**KB auto-seed on `vcf init`.** Closes followup #5: every fresh install now
+has a populated `~/.vcf/kb` out of the box, so KB-reading tools return real
+content on the first call instead of silently degrading to empty lists.
+
+### Fixed
+
+- **`vcf init` now seeds `~/.vcf/kb` from `@kaelith-labs/kb`.** Previously
+  the init command wrote `kb.root: ~/.vcf/kb` into `config.yaml` but never
+  created or populated the directory. Every KB-reading tool
+  (`spec_suggest_primers`, `build_context`, `plan_context`, `primer_list`,
+  `review_prepare`, …) tolerates a missing KB dir by returning an empty
+  list, so fresh installs looked healthy while answering every KB query
+  with nothing. Init now copies the full primer/best-practice/lens/
+  review-system/reviewers/standards tree into place and seeds
+  `~/.vcf/kb-ancestors` as the three-way-merge base for future
+  `vcf update-primers` runs. Idempotent — skipped if `~/.vcf/kb` already
+  exists.
+
+### Changed
+
+- **`@kaelith-labs/kb` promoted from optional peer dependency to regular
+  dependency.** Every install path (npm, brew, scoop) now pulls the
+  content package so `vcf init` can seed deterministically. Existing
+  installs that skipped the optional peer will pick it up on upgrade.
+- **Shared KB-path resolver.** `vcf init` and `vcf update-primers` both
+  resolve the upstream KB through a single `resolveUpstreamKbRoot()`
+  helper using `createRequire` — robust against hoisted/nested npm
+  layouts and pnpm store symlinks. Honors a `VCF_KB_SOURCE` env override
+  for offline builds and tests.
+
+### MCP compatibility
+
+- MCP spec: `2025-11-25` (unchanged)
+- SDK pin: `^1.29` (unchanged)
+
 ## [0.3.1] — 2026-04-21
 
 **Hardening pass — real bugs + workaround cleanup.** No public-API changes;

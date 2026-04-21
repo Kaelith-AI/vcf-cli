@@ -159,11 +159,23 @@ check_out "config.yaml has no unresolved \${ENV} refs" \
   'version: ?1' \
   cat "$HOME/.vcf/config.yaml"
 
-# Note: vcf.db is lazy-created on first MCP/tool call (not at init), and
-# ~/.vcf/kb is seeded only when @kaelith-labs/kb is available alongside
-# the CLI install — a known gap filed in plans/2026-04-20-followups.md.
-# The smoke deliberately doesn't assert on either so a packaged install
-# without the kb peer still passes here.
+# KB seed: @kaelith-labs/kb is a regular dep from 0.3.2 on, so every
+# install path pulls the content package and `vcf init` copies it into
+# ~/.vcf/kb. Note: vcf.db remains lazy — still only created on first
+# MCP/tool call.
+check "~/.vcf/kb seeded from @kaelith-labs/kb" test -d "$HOME/.vcf/kb/primers"
+primer_count=$(find "$HOME/.vcf/kb/primers" -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+if [[ "$primer_count" -gt 0 ]]; then
+  echo "  ✓ ~/.vcf/kb/primers has $primer_count *.md files"
+  PASS=$((PASS+1))
+  RESULTS+=("PASS  ~/.vcf/kb/primers has $primer_count *.md files")
+else
+  echo "  ✗ ~/.vcf/kb/primers has no *.md files (KB seed failed)"
+  FAIL=$((FAIL+1))
+  RESULTS+=("FAIL  ~/.vcf/kb/primers empty")
+fi
+check "~/.vcf/kb-ancestors seeded for three-way merges" \
+  test -d "$HOME/.vcf/kb-ancestors/primers"
 
 # ~/.vcf should be user-only readable. 700 is ideal; anything group/world
 # readable surfaces as a warning, not a hard fail (default umask on many

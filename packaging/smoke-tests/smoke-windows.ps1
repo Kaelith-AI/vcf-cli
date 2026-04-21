@@ -223,10 +223,26 @@ try {
 
   Assert-Check "~\.vcf exists" { Test-Path "$HOME\.vcf" -PathType Container }
   Assert-Check "~\.vcf\config.yaml exists" { Test-Path "$HOME\.vcf\config.yaml" -PathType Leaf }
-  # Note: vcf.db is lazy-created on first MCP/tool call (not at init), and
-  # ~\.vcf\kb is seeded only when @kaelith-labs/kb is available alongside
-  # the CLI install — a known gap filed in plans\2026-04-20-followups.md.
-  # The smoke deliberately doesn't assert on either.
+
+  # KB seed: @kaelith-labs/kb is a regular dep from 0.3.2 on, so every
+  # install path pulls the content package and `vcf init` copies it into
+  # ~\.vcf\kb. vcf.db stays lazy — only created on first MCP/tool call.
+  Assert-Check "~\.vcf\kb\primers seeded from @kaelith-labs/kb" {
+    Test-Path "$HOME\.vcf\kb\primers" -PathType Container
+  }
+  $primerCount = (Get-ChildItem "$HOME\.vcf\kb\primers" -Filter *.md -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
+  if ($primerCount -gt 0) {
+    Write-Host ("  [x] ~\.vcf\kb\primers has {0} *.md files" -f $primerCount) -ForegroundColor Green
+    $script:Pass++
+    $script:Results.Add("PASS  kb primers populated ($primerCount)")
+  } else {
+    Write-Host "  [ ] ~\.vcf\kb\primers has no *.md files (KB seed failed)" -ForegroundColor Red
+    $script:Fail++
+    $script:Results.Add("FAIL  kb primers empty")
+  }
+  Assert-Check "~\.vcf\kb-ancestors seeded for three-way merges" {
+    Test-Path "$HOME\.vcf\kb-ancestors\primers" -PathType Container
+  }
 
   Assert-Match "config.yaml has valid version: 1 header" 'version:\s*1' {
     Get-Content "$HOME\.vcf\config.yaml" -TotalCount 5
