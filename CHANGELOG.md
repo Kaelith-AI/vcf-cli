@@ -4,6 +4,75 @@ All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
+## [0.3.0-alpha.0] — 2026-04-21
+
+**Migrate off `better-sqlite3` to `node:sqlite`.** Eliminates every native-addon
+install-path failure class in one change.
+
+### Why
+
+The 2026-04-20 Surface smoke test surfaced a hard block on Windows ARM64 +
+Node 24: `better-sqlite3@11.10`'s `prebuild-install` couldn't locate the
+matching prebuilt binary despite it existing on GitHub releases. Upstream
+research (better-sqlite3 #1463, #655, PR #1446, archived `prebuild-install`
+repo) showed this is a known, multi-year-stalled issue — not something a
+formula tweak can route around.
+
+Node 22.5 introduced a built-in SQLite module (`node:sqlite`), unflagged
+since 22.13, at Stability 1.2 RC since Node 25.7. Migrating gives us:
+- Zero native compile — no `prebuild-install`, no `node-gyp`, no MSVC
+  dependency on Windows, no Xcode on macOS
+- Works identically on every platform Node runs on: Windows x64, Windows
+  ARM64, macOS Intel, macOS ARM, Linux glibc, Linux musl
+- Smaller install footprint
+- No peer dependency on `@types/better-sqlite3`
+
+### Changed
+
+- **Dependency:** removed `better-sqlite3` (and `@types/better-sqlite3`
+  devDep). No runtime additions — `node:sqlite` ships with Node itself.
+- **`engines.node`:** bumped `>=20` → `>=22.13`. Node 22 is active LTS
+  through October 2027.
+- **CI matrix:** dropped Node 20, kept 22 and added 24. Matrix stays
+  Ubuntu + macOS + Windows.
+- **DB layer** (`src/db/global.ts`, `src/db/project.ts`, `src/db/migrate.ts`):
+  - `new Database(path, opts)` → `new DatabaseSync(path, opts)`
+  - `opts.readonly` → `opts.readOnly` (API naming)
+  - `db.pragma("journal_mode = WAL")` → `db.exec("PRAGMA journal_mode = WAL")`
+  - `db.transaction(fn)` → explicit `BEGIN / COMMIT / ROLLBACK` in migrate.ts
+    (node:sqlite has no wrapper helper; the migration path's one usage was
+    trivial to convert)
+  - Foreign keys on by default now (node:sqlite default) — kept the
+    explicit `PRAGMA foreign_keys = ON` anyway so the contract is clear.
+- **Type imports:** every `Database as DatabaseType from "better-sqlite3"`
+  rewritten to `DatabaseSync as DatabaseType from "node:sqlite"`.
+  Sites: `src/server.ts`, `src/review/submitCore.ts`, `src/util/audit.ts`,
+  `src/util/projectRegistry.ts`, `test/helpers/db-cleanup.ts`.
+- **Stmt return-type casts:** `node:sqlite`'s typed return is
+  `Record<string, SQLOutputValue>`, stricter than better-sqlite3's generic.
+  Added `as unknown as RowType[]` where needed at known-safe call sites
+  (idea_search, spec_get, idea_get, projectRegistry.listProjects).
+
+### Build infrastructure
+
+- **tsup:** esbuild strips the `node:` protocol prefix on built-ins when
+  bundling for Node. For `node:sqlite` that breaks runtime (no bare
+  `sqlite` alias exists in Node's builtin map). Added a post-build
+  `onSuccess` hook that rewrites `from 'sqlite'` back to
+  `from "node:sqlite"` across `dist/*.js`.
+- **vitest:** bumped to ^4.1.4 (from ^2.1.9). Vite 5 + vitest 2 didn't
+  handle `node:sqlite` resolution because the module predates their
+  built-in map. Vitest 4 / Vite 6 resolves it correctly.
+- **tsup target:** `node20` → `node22` to match the new engines floor.
+
+### Known followups (not blocking 0.3.0)
+
+- `node:sqlite` still emits `ExperimentalWarning` on Node 22/24. Stability-2
+  lands in Node 25.7 (April 2027 LTS). Cosmetic — doesn't affect the MCP
+  stdio protocol. Filed as followup 7.
+- Windows x64 VM smoke not yet run — only Windows ARM64 was tested this
+  pass. Filed as followup 6.
+
 ## [0.2.1-alpha.0] — 2026-04-20
 
 Three install-path bugs found during the first real Homebrew smoke run on

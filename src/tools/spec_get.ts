@@ -39,10 +39,12 @@ export function registerSpecGet(server: McpServer, deps: ServerDeps): void {
         if (parsed.path !== undefined) {
           path = parsed.path;
         } else {
+          // Zod refine guarantees slug is defined when path is absent.
+          const slug = parsed.slug!;
           const row = deps.globalDb
             .prepare("SELECT path FROM specs WHERE slug = ? ORDER BY created_at DESC LIMIT 1")
-            .get(parsed.slug) as { path: string } | undefined;
-          if (!row) throw new McpError("E_NOT_FOUND", `no spec with slug "${parsed.slug}"`);
+            .get(slug) as unknown as { path: string } | undefined;
+          if (!row) throw new McpError("E_NOT_FOUND", `no spec with slug "${slug}"`);
           path = row.path;
         }
         const canonical = await assertInsideAllowedRoot(path, deps.config.workspace.allowed_roots);

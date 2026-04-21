@@ -12,12 +12,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # npm/cli#4828 (Linux-generated lockfile missing per-platform
-        # optional deps for Windows/macOS runners) was closed 2025-04-03;
-        # lockfile regenerated 2026-04-19 now carries 25 per-platform
-        # rollup entries, so the three-OS matrix can come back.
+        # Node 20 dropped with the 0.3.0 migration from better-sqlite3 to
+        # node:sqlite, which requires >= 22.13. 22 is active LTS; 24 is
+        # current.
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [20, 22]
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

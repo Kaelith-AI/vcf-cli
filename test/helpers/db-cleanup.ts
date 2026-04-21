@@ -1,6 +1,6 @@
 // Test-only tracked-DB openers and an explicit close helper.
 //
-// Why this exists: better-sqlite3 holds an OS-level lock on the `.db`,
+// Why this exists: node:sqlite holds an OS-level lock on the `.db`,
 // `-wal`, and `-shm` files while the connection is open. On Linux and
 // macOS an unlink still succeeds (the inode hangs around until the last
 // handle closes). On Windows, unlink *blocks* indefinitely. Tests that
@@ -21,7 +21,7 @@
 //     await rm(tmpRoot, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
 //   });
 
-import type { Database as DatabaseType } from "better-sqlite3";
+import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { openGlobalDb as _openGlobalDb, type OpenGlobalDbOptions } from "../../src/db/global.js";
 import {
   openProjectDb as _openProjectDb,

@@ -7,7 +7,7 @@
 
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import Database, { type Database as DatabaseType } from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import { PROJECT_MIGRATIONS } from "./schema.js";
 import { runMigrations } from "./migrate.js";
 
@@ -17,19 +17,19 @@ export interface OpenProjectDbOptions {
   readonly?: boolean;
 }
 
-export function openProjectDb(opts: OpenProjectDbOptions): DatabaseType {
+export function openProjectDb(opts: OpenProjectDbOptions): DatabaseSync {
   mkdirSync(dirname(opts.path), { recursive: true });
-  const db: DatabaseType = new Database(opts.path, {
-    readonly: opts.readonly === true,
-    fileMustExist: false,
+  const db = new DatabaseSync(opts.path, {
+    readOnly: opts.readonly === true,
+    enableForeignKeyConstraints: true,
   });
   if (opts.readonly !== true) {
-    db.pragma("journal_mode = WAL");
-    db.pragma("foreign_keys = ON");
-    db.pragma("synchronous = NORMAL");
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec("PRAGMA synchronous = NORMAL");
     runMigrations(db, PROJECT_MIGRATIONS);
   } else {
-    db.pragma("foreign_keys = ON");
+    db.exec("PRAGMA foreign_keys = ON");
   }
   return db;
 }

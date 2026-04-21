@@ -9,7 +9,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { Database as DatabaseType } from "better-sqlite3";
+import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { McpError } from "../errors.js";
 import {

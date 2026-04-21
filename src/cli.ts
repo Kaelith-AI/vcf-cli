@@ -1279,8 +1279,9 @@ async function runAdminAudit(opts: {
   full?: boolean;
 }): Promise<void> {
   // Open writable: the global DB may not exist yet on first CLI run.
-  // better-sqlite3's readonly mode refuses to create, so we accept the
-  // tiny cost of creating an empty DB here (migrations are idempotent).
+  // node:sqlite's readOnly mode refuses to create missing files, so we
+  // accept the tiny cost of creating an empty DB here (migrations are
+  // idempotent).
   const globalDb = openGlobalDb({
     path: resolvePath(homedir(), ".vcf", "vcf.db"),
   });

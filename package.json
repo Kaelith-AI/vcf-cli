@@ -1,6 +1,6 @@
 {
   "name": "@kaelith-labs/cli",
-  "version": "0.2.1-alpha.0",
+  "version": "0.3.0-alpha.0",
   "description": "Vibe Coding Framework MCP server + CLI — LLM-agnostic lifecycle tooling (capture, spec, plan, build, test, review, ship).",
   "type": "module",
   "license": "Apache-2.0",
@@ -14,7 +14,7 @@
   },
   "homepage": "https://github.com/Kaelith-Labs/vcf-cli#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "bin": {
     "vcf": "dist/cli.js",
@@ -46,7 +46,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^11.5.0",
     "commander": "^12.1.0",
     "pino": "^9.5.0",
     "simple-git": "^3.27.0",
@@ -63,7 +62,6 @@
     }
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.9.0",
     "@typescript-eslint/eslint-plugin": "^8.14.0",
     "@typescript-eslint/parser": "^8.14.0",
@@ -71,7 +69,7 @@
     "prettier": "^3.3.3",
     "tsup": "^8.3.5",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.5"
+    "vitest": "^4.1.4"
   },
   "publishConfig": {
     "access": "public",

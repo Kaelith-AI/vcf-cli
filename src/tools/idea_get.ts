@@ -40,9 +40,11 @@ export function registerIdeaGet(server: McpServer, deps: ServerDeps): void {
         if (parsed.path !== undefined) {
           path = parsed.path;
         } else {
+          // Zod refine guarantees slug is defined when path is absent.
+          const slug = parsed.slug!;
           const row = deps.globalDb
             .prepare("SELECT path FROM ideas WHERE slug = ? ORDER BY created_at DESC LIMIT 1")
-            .get(parsed.slug) as { path: string } | undefined;
+            .get(slug) as unknown as { path: string } | undefined;
           if (!row) throw new McpError("E_NOT_FOUND", `no idea with slug "${parsed.slug}"`);
           path = row.path;
         }

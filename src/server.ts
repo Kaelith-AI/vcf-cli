@@ -14,7 +14,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { Database as DatabaseType } from "better-sqlite3";
+import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { VERSION, MCP_SPEC_VERSION } from "./version.js";
 import type { Config } from "./config/schema.js";
 import type { Scope, ResolvedScope } from "./scope.js";

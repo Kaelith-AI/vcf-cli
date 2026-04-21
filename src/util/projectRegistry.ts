@@ -14,7 +14,7 @@
 //   - Unregistering does not delete the project — it only removes the
 //     global-DB row.
 
-import type { Database as DatabaseType } from "better-sqlite3";
+import type { DatabaseSync as DatabaseType } from "node:sqlite";
 
 export interface ProjectRow {
   name: string;
@@ -92,7 +92,7 @@ export function listProjects(db: DatabaseType): ProjectRow[] {
     .prepare(
       "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects ORDER BY registered_at DESC",
     )
-    .all() as DbRow[];
+    .all() as unknown as DbRow[];
   return rows.map(rowOf);
 }
 

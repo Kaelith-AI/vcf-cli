@@ -68,7 +68,7 @@ export function registerIdeaSearch(server: McpServer, deps: ServerDeps): void {
             `SELECT path, slug, tags, created_at, frontmatter_json FROM ideas ${where}
              ORDER BY created_at DESC LIMIT ?`,
           )
-          .all(...params, parsed.limit) as IdeaRow[];
+          .all(...params, parsed.limit) as unknown as IdeaRow[];
 
         const hits = rows.map((r) => {
           const fm = safeParseJson(r.frontmatter_json) as { title?: string } | null;

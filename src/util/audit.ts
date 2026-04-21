@@ -15,7 +15,7 @@
 // slice in later milestones if needed.
 
 import { createHash } from "node:crypto";
-import type { Database as DatabaseType } from "better-sqlite3";
+import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { touchProject } from "./projectRegistry.js";
 
 export type AuditScope = "global" | "project" | "cli";
