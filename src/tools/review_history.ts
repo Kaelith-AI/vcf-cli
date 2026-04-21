@@ -38,68 +38,68 @@ export function registerReviewHistory(server: McpServer, deps: ServerDeps): void
       inputSchema: ReviewHistoryInput.shape,
     },
     async (args: z.infer<typeof ReviewHistoryInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "review_history requires project scope");
-        }
-        const parsed = ReviewHistoryInput.parse(args);
-        if (parsed.type !== undefined && !deps.config.review.categories.includes(parsed.type)) {
-          throw new McpError(
-            "E_VALIDATION",
-            `review type '${parsed.type}' not in config.review.categories (${deps.config.review.categories.join(", ")})`,
-          );
-        }
-        const clauses: string[] = [];
-        const params: Array<string | number> = [];
-        if (parsed.type !== undefined) {
-          clauses.push("type = ?");
-          params.push(parsed.type);
-        }
-        if (parsed.stage !== undefined) {
-          clauses.push("stage = ?");
-          params.push(parsed.stage);
-        }
-        const where = clauses.length > 0 ? "WHERE " + clauses.join(" AND ") : "";
-        const rows = deps.projectDb
-          .prepare(
-            `SELECT id, type, stage, status, verdict, started_at, finished_at, report_path
-             FROM review_runs ${where}
-             ORDER BY started_at DESC LIMIT ?`,
-          )
-          .all(...params, parsed.limit) as Array<{
-          id: string;
-          type: string;
-          stage: number;
-          status: string;
-          verdict: string | null;
-          started_at: number;
-          finished_at: number | null;
-          report_path: string | null;
-        }>;
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "review_history requires project scope");
+          }
+          const parsed = ReviewHistoryInput.parse(args);
+          if (parsed.type !== undefined && !deps.config.review.categories.includes(parsed.type)) {
+            throw new McpError(
+              "E_VALIDATION",
+              `review type '${parsed.type}' not in config.review.categories (${deps.config.review.categories.join(", ")})`,
+            );
+          }
+          const clauses: string[] = [];
+          const params: Array<string | number> = [];
+          if (parsed.type !== undefined) {
+            clauses.push("type = ?");
+            params.push(parsed.type);
+          }
+          if (parsed.stage !== undefined) {
+            clauses.push("stage = ?");
+            params.push(parsed.stage);
+          }
+          const where = clauses.length > 0 ? "WHERE " + clauses.join(" AND ") : "";
+          const rows = deps.projectDb
+            .prepare(
+              `SELECT id, type, stage, status, verdict, started_at, finished_at, report_path
+               FROM review_runs ${where}
+               ORDER BY started_at DESC LIMIT ?`,
+            )
+            .all(...params, parsed.limit) as Array<{
+            id: string;
+            type: string;
+            stage: number;
+            status: string;
+            verdict: string | null;
+            started_at: number;
+            finished_at: number | null;
+            report_path: string | null;
+          }>;
 
-        const payload = success(
-          rows.map((r) => r.report_path).filter((x): x is string => typeof x === "string"),
-          `review_history: ${rows.length} row(s)${parsed.type ? " type=" + parsed.type : ""}${
-            parsed.stage !== undefined ? " stage=" + parsed.stage : ""
-          }.`,
-          parsed.expand
-            ? { content: { runs: rows } }
-            : { expand_hint: "Call review_history with expand=true for the full list." },
-        );
-        try {
+          const payload = success(
+            rows.map((r) => r.report_path).filter((x): x is string => typeof x === "string"),
+            `review_history: ${rows.length} row(s)${parsed.type ? " type=" + parsed.type : ""}${
+              parsed.stage !== undefined ? " stage=" + parsed.stage : ""
+            }.`,
+            parsed.expand
+              ? { content: { runs: rows } }
+              : { expand_hint: "Call review_history with expand=true for the full list." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "review_history",
             scope: "project",
             project_root: readProjectRoot(deps),
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

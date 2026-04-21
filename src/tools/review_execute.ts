@@ -71,154 +71,160 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
       args: z.infer<typeof ReviewExecuteInput>,
       extra: { signal?: AbortSignal } | undefined,
     ) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "review_execute requires project scope");
-        }
-        const parsed = ReviewExecuteInput.parse(args);
-        const root = readProjectRoot(deps);
-        if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
+      // Captured during body; onComplete reads these so the audit never
+      // contains the full LLM prompt or response body.
+      let auditInputs: unknown = args;
+      let auditOutputs: unknown = undefined;
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "review_execute requires project scope");
+          }
+          const parsed = ReviewExecuteInput.parse(args);
+          const root = readProjectRoot(deps);
+          if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 
-        const run = deps.projectDb
-          .prepare(
-            `SELECT id, type, stage, status, carry_forward_json FROM review_runs WHERE id = ?`,
-          )
-          .get(parsed.run_id) as ReviewRunRow | undefined;
-        if (!run) {
-          throw new McpError("E_NOT_FOUND", `review run "${parsed.run_id}" does not exist`);
-        }
+          const run = deps.projectDb
+            .prepare(
+              `SELECT id, type, stage, status, carry_forward_json FROM review_runs WHERE id = ?`,
+            )
+            .get(parsed.run_id) as ReviewRunRow | undefined;
+          if (!run) {
+            throw new McpError("E_NOT_FOUND", `review run "${parsed.run_id}" does not exist`);
+          }
 
-        // Endpoint + trust-level gate.
-        const endpoint = deps.config.endpoints.find((e) => e.name === parsed.endpoint);
-        if (!endpoint) {
-          throw new McpError(
-            "E_VALIDATION",
-            `endpoint '${parsed.endpoint}' not in config.endpoints[]`,
-          );
-        }
-        if (endpoint.trust_level === "public" && !parsed.allow_public_endpoint) {
-          throw new McpError(
-            "E_STATE_INVALID",
-            `endpoint '${endpoint.name}' has trust_level='public'; pass allow_public_endpoint=true to override`,
-          );
-        }
-
-        // Resolve API key at call time from env (config has the *name*).
-        let apiKey: string | undefined;
-        if (endpoint.auth_env_var) {
-          apiKey = process.env[endpoint.auth_env_var];
-          if (!apiKey && endpoint.trust_level !== "local") {
+          // Endpoint + trust-level gate.
+          const endpoint = deps.config.endpoints.find((e) => e.name === parsed.endpoint);
+          if (!endpoint) {
             throw new McpError(
-              "E_CONFIG_MISSING_ENV",
-              `env var ${endpoint.auth_env_var} is unset; endpoint '${endpoint.name}' needs it`,
+              "E_VALIDATION",
+              `endpoint '${parsed.endpoint}' not in config.endpoints[]`,
             );
           }
-        }
-
-        // Compose the prompt from the run workspace (written by review_prepare).
-        const runDir = join(root, ".review-runs", run.id);
-        if (!existsSync(runDir)) {
-          throw new McpError(
-            "E_STATE_INVALID",
-            `run directory ${runDir} missing — call review_prepare first`,
-          );
-        }
-        const messages = await composeMessages(runDir, run);
-        // Always redact outgoing content — secrets should not leave the box
-        // even to a local endpoint the operator might later aim elsewhere.
-        const redactedMessages = redact(messages) as ChatMessage[];
-
-        // Cancellation: honor the MCP-provided signal + local timeout.
-        const ctrl = new AbortController();
-        const mcpSignal = extra?.signal;
-        const timer = setTimeout(() => ctrl.abort(), parsed.timeout_ms);
-        const onAbort = (): void => ctrl.abort();
-        mcpSignal?.addEventListener("abort", onAbort);
-
-        const modelId = parsed.model_id ?? pickModelId(deps, run.type);
-        let content: string;
-        try {
-          content = await callChatCompletion({
-            baseUrl: endpoint.base_url,
-            apiKey,
-            model: modelId,
-            messages: redactedMessages,
-            temperature: 0.1,
-            jsonResponse: true,
-            signal: ctrl.signal,
-          });
-        } catch (e) {
-          if (e instanceof LlmError) {
-            if (e.kind === "canceled") {
-              throw new McpError("E_CANCELED", e.message);
-            }
-            if (e.kind === "unreachable") {
-              throw new McpError("E_ENDPOINT_UNREACHABLE", e.message);
-            }
+          if (endpoint.trust_level === "public" && !parsed.allow_public_endpoint) {
             throw new McpError(
-              "E_INTERNAL",
-              `endpoint '${endpoint.name}' returned an error response`,
-              e.message,
+              "E_STATE_INVALID",
+              `endpoint '${endpoint.name}' has trust_level='public'; pass allow_public_endpoint=true to override`,
             );
           }
-          throw e;
-        } finally {
-          clearTimeout(timer);
-          mcpSignal?.removeEventListener("abort", onAbort);
-        }
 
-        // Parse structured verdict from the response.
-        const submission = parseSubmission(content);
+          // Resolve API key at call time from env (config has the *name*).
+          let apiKey: string | undefined;
+          if (endpoint.auth_env_var) {
+            apiKey = process.env[endpoint.auth_env_var];
+            if (!apiKey && endpoint.trust_level !== "local") {
+              throw new McpError(
+                "E_CONFIG_MISSING_ENV",
+                `env var ${endpoint.auth_env_var} is unset; endpoint '${endpoint.name}' needs it`,
+              );
+            }
+          }
 
-        const { reportPath, merged } = await persistReviewSubmission({
-          projectDb: deps.projectDb,
-          allowedRoots: deps.config.workspace.allowed_roots,
-          projectRoot: root,
-          run,
-          submission,
-        });
+          // Compose the prompt from the run workspace (written by review_prepare).
+          const runDir = join(root, ".review-runs", run.id);
+          if (!existsSync(runDir)) {
+            throw new McpError(
+              "E_STATE_INVALID",
+              `run directory ${runDir} missing — call review_prepare first`,
+            );
+          }
+          const messages = await composeMessages(runDir, run);
+          // Always redact outgoing content — secrets should not leave the box
+          // even to a local endpoint the operator might later aim elsewhere.
+          const redactedMessages = redact(messages) as ChatMessage[];
 
-        const payload = success(
-          [reportPath],
-          `review_execute: ${run.type} stage ${run.stage} verdict=${submission.verdict} (endpoint=${endpoint.name}, model=${modelId}).`,
-          parsed.expand
-            ? {
-                content: {
-                  run_id: run.id,
-                  report_path: reportPath,
-                  verdict: submission.verdict,
-                  endpoint: endpoint.name,
-                  model_id: modelId,
-                  carry_forward: merged,
-                },
+          // Cancellation: honor the MCP-provided signal + local timeout.
+          const ctrl = new AbortController();
+          const mcpSignal = extra?.signal;
+          const timer = setTimeout(() => ctrl.abort(), parsed.timeout_ms);
+          const onAbort = (): void => ctrl.abort();
+          mcpSignal?.addEventListener("abort", onAbort);
+
+          const modelId = parsed.model_id ?? pickModelId(deps, run.type);
+          let content: string;
+          try {
+            content = await callChatCompletion({
+              baseUrl: endpoint.base_url,
+              apiKey,
+              model: modelId,
+              messages: redactedMessages,
+              temperature: 0.1,
+              jsonResponse: true,
+              signal: ctrl.signal,
+            });
+          } catch (e) {
+            if (e instanceof LlmError) {
+              if (e.kind === "canceled") {
+                throw new McpError("E_CANCELED", e.message);
               }
-            : { expand_hint: "Call review_execute with expand=true for the content payload." },
-        );
-        try {
+              if (e.kind === "unreachable") {
+                throw new McpError("E_ENDPOINT_UNREACHABLE", e.message);
+              }
+              throw new McpError(
+                "E_INTERNAL",
+                `endpoint '${endpoint.name}' returned an error response`,
+                e.message,
+              );
+            }
+            throw e;
+          } finally {
+            clearTimeout(timer);
+            mcpSignal?.removeEventListener("abort", onAbort);
+          }
+
+          // Parse structured verdict from the response.
+          const submission = parseSubmission(content);
+
+          const { reportPath, merged } = await persistReviewSubmission({
+            projectDb: deps.projectDb,
+            allowedRoots: deps.config.workspace.allowed_roots,
+            projectRoot: root,
+            run,
+            submission,
+          });
+
+          // Audit shape: deliberately omit message content + response body.
+          auditInputs = {
+            run_id: parsed.run_id,
+            endpoint: endpoint.name,
+            model_id: modelId,
+            timeout_ms: parsed.timeout_ms,
+          };
+          auditOutputs = {
+            ok: true,
+            verdict: submission.verdict,
+            finding_count: submission.findings.length,
+            report_path: reportPath,
+          };
+
+          return success(
+            [reportPath],
+            `review_execute: ${run.type} stage ${run.stage} verdict=${submission.verdict} (endpoint=${endpoint.name}, model=${modelId}).`,
+            parsed.expand
+              ? {
+                  content: {
+                    run_id: run.id,
+                    report_path: reportPath,
+                    verdict: submission.verdict,
+                    endpoint: endpoint.name,
+                    model_id: modelId,
+                    carry_forward: merged,
+                  },
+                }
+              : { expand_hint: "Call review_execute with expand=true for the content payload." },
+          );
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "review_execute",
             scope: "project",
-            project_root: root,
-            // Deliberately omit message content + response body from the audit.
-            inputs: {
-              run_id: parsed.run_id,
-              endpoint: endpoint.name,
-              model_id: modelId,
-              timeout_ms: parsed.timeout_ms,
-            },
-            outputs: {
-              ok: true,
-              verdict: submission.verdict,
-              finding_count: submission.findings.length,
-              report_path: reportPath,
-            },
-            result_code: "ok",
+            project_root: readProjectRoot(deps),
+            inputs: auditInputs,
+            outputs: auditOutputs ?? payload,
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

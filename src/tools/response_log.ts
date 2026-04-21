@@ -43,83 +43,83 @@ export function registerResponseLogAdd(server: McpServer, deps: ServerDeps): voi
       inputSchema: ResponseLogAddInput.shape,
     },
     async (args: z.infer<typeof ResponseLogAddInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "response_log_add requires project scope");
-        }
-        const parsed = ResponseLogAddInput.parse(args);
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "response_log_add requires project scope");
+          }
+          const parsed = ResponseLogAddInput.parse(args);
 
-        // M5 writes without validating the review_run_id existence (review
-        // runs arrive in M7). When M7 lands, this block becomes a FK check.
-        const root = readProjectRoot(deps);
-        if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
+          // M5 writes without validating the review_run_id existence (review
+          // runs arrive in M7). When M7 lands, this block becomes a FK check.
+          const root = readProjectRoot(deps);
+          if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 
-        const dir = join(root, "plans", "reviews");
-        await assertInsideAllowedRoot(dir, deps.config.workspace.allowed_roots);
-        await mkdir(dir, { recursive: true });
-        const logPath = join(dir, "response-log.md");
-        await assertInsideAllowedRoot(logPath, deps.config.workspace.allowed_roots);
+          const dir = join(root, "plans", "reviews");
+          await assertInsideAllowedRoot(dir, deps.config.workspace.allowed_roots);
+          await mkdir(dir, { recursive: true });
+          const logPath = join(dir, "response-log.md");
+          await assertInsideAllowedRoot(logPath, deps.config.workspace.allowed_roots);
 
-        if (!existsSync(logPath)) {
-          await writeFile(
-            logPath,
-            "# Response Log (append-only)\n\n> Reviewers read this before every pass.\n\n",
-            "utf8",
-          );
-        }
+          if (!existsSync(logPath)) {
+            await writeFile(
+              logPath,
+              "# Response Log (append-only)\n\n> Reviewers read this before every pass.\n\n",
+              "utf8",
+            );
+          }
 
-        const ts = new Date().toISOString();
-        const block = [
-          "---",
-          `review_run_id: ${parsed.review_run_id}`,
-          `stance: ${parsed.stance}`,
-          `created_at: ${ts}`,
-          "---",
-          "",
-          parsed.note.trim(),
-          "",
-          "---",
-          "",
-        ].join("\n");
-        await appendFile(logPath, block, "utf8");
+          const ts = new Date().toISOString();
+          const block = [
+            "---",
+            `review_run_id: ${parsed.review_run_id}`,
+            `stance: ${parsed.stance}`,
+            `created_at: ${ts}`,
+            "---",
+            "",
+            parsed.note.trim(),
+            "",
+            "---",
+            "",
+          ].join("\n");
+          await appendFile(logPath, block, "utf8");
 
-        deps.projectDb
-          .prepare(
-            `INSERT INTO response_log (review_run_id, stance, note, created_at)
-             VALUES (?, ?, ?, ?)`,
-          )
-          .run(parsed.review_run_id, parsed.stance, parsed.note, Date.now());
+          deps.projectDb
+            .prepare(
+              `INSERT INTO response_log (review_run_id, stance, note, created_at)
+               VALUES (?, ?, ?, ?)`,
+            )
+            .run(parsed.review_run_id, parsed.stance, parsed.note, Date.now());
 
-        const payload = success(
-          [logPath],
-          `Appended ${parsed.stance} response for ${parsed.review_run_id} (${parsed.note.length} chars).`,
-          parsed.expand
-            ? {
-                content: {
-                  log_path: logPath,
-                  review_run_id: parsed.review_run_id,
-                  stance: parsed.stance,
+          const payload = success(
+            [logPath],
+            `Appended ${parsed.stance} response for ${parsed.review_run_id} (${parsed.note.length} chars).`,
+            parsed.expand
+              ? {
+                  content: {
+                    log_path: logPath,
+                    review_run_id: parsed.review_run_id,
+                    stance: parsed.stance,
+                  },
+                }
+              : {
+                  expand_hint:
+                    "Call response_log_add with expand=true to receive the appended entry metadata.",
                 },
-              }
-            : {
-                expand_hint:
-                  "Call response_log_add with expand=true to receive the appended entry metadata.",
-              },
-        );
-        try {
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "response_log_add",
             scope: "project",
-            project_root: root,
-            inputs: parsed,
+            project_root: readProjectRoot(deps),
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

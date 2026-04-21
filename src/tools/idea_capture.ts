@@ -19,7 +19,7 @@ import { z } from "zod";
 import { mkdir, writeFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ServerDeps } from "../server.js";
-import { success, wrapResult, runTool, failure } from "../envelope.js";
+import { success, runTool } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { slugify, isoDate } from "../util/slug.js";
 import { writeAudit } from "../util/audit.js";
@@ -56,88 +56,74 @@ export function registerIdeaCapture(server: McpServer, deps: ServerDeps): void {
       inputSchema: IdeaCaptureInput.shape,
     },
     async (args: IdeaCaptureArgs) => {
-      return runTool(async () => {
-        const parsed = IdeaCaptureInput.parse(args);
-        const ideasDir = deps.config.workspace.ideas_dir;
-        await assertInsideAllowedRoot(ideasDir, deps.config.workspace.allowed_roots);
-        await mkdir(ideasDir, { recursive: true });
+      return runTool(
+        async () => {
+          const parsed = IdeaCaptureInput.parse(args);
+          const ideasDir = deps.config.workspace.ideas_dir;
+          await assertInsideAllowedRoot(ideasDir, deps.config.workspace.allowed_roots);
+          await mkdir(ideasDir, { recursive: true });
 
-        const titleSource = parsed.title ?? parsed.content.split("\n")[0] ?? "untitled";
-        const baseSlug = slugify(titleSource);
-        const date = isoDate();
-        const { target, slug } = await pickNonConflictingPath(ideasDir, date, baseSlug);
+          const titleSource = parsed.title ?? parsed.content.split("\n")[0] ?? "untitled";
+          const baseSlug = slugify(titleSource);
+          const date = isoDate();
+          const { target, slug } = await pickNonConflictingPath(ideasDir, date, baseSlug);
 
-        // Re-validate the final target after we've computed it.
-        await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
+          // Re-validate the final target after we've computed it.
+          await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
 
-        const frontmatter = {
-          type: "idea",
-          slug,
-          title: titleSource.slice(0, 256),
-          created: new Date().toISOString(),
-          tags: parsed.tags,
-          ...(parsed.context !== undefined ? { context: parsed.context } : {}),
-        };
-        const markdown = renderMarkdown(frontmatter, parsed.content);
-        await writeFile(target, markdown, { encoding: "utf8", flag: "wx" }).catch(
-          (err: NodeJS.ErrnoException) => {
-            if (err.code === "EEXIST") {
-              throw new McpError("E_ALREADY_EXISTS", `${target} already exists`);
-            }
-            throw err;
-          },
-        );
+          const frontmatter = {
+            type: "idea",
+            slug,
+            title: titleSource.slice(0, 256),
+            created: new Date().toISOString(),
+            tags: parsed.tags,
+            ...(parsed.context !== undefined ? { context: parsed.context } : {}),
+          };
+          const markdown = renderMarkdown(frontmatter, parsed.content);
+          await writeFile(target, markdown, { encoding: "utf8", flag: "wx" }).catch(
+            (err: NodeJS.ErrnoException) => {
+              if (err.code === "EEXIST") {
+                throw new McpError("E_ALREADY_EXISTS", `${target} already exists`);
+              }
+              throw err;
+            },
+          );
 
-        // Index in the global DB.
-        deps.globalDb
-          .prepare(
-            `INSERT INTO ideas (path, slug, tags, created_at, frontmatter_json)
-             VALUES (?, ?, ?, ?, ?)`,
-          )
-          .run(target, slug, JSON.stringify(parsed.tags), Date.now(), JSON.stringify(frontmatter));
+          // Index in the global DB.
+          deps.globalDb
+            .prepare(
+              `INSERT INTO ideas (path, slug, tags, created_at, frontmatter_json)
+               VALUES (?, ?, ?, ?, ?)`,
+            )
+            .run(
+              target,
+              slug,
+              JSON.stringify(parsed.tags),
+              Date.now(),
+              JSON.stringify(frontmatter),
+            );
 
-        const payload = success(
-          [target],
-          `Captured idea "${slug}" with ${parsed.tags.length} tag(s).`,
-          parsed.expand
-            ? { content: markdown }
-            : {
-                expand_hint:
-                  'Call idea_capture with {"expand": true} next time to receive the rendered markdown.',
-              },
-        );
-
-        try {
-          writeAudit(deps.globalDb, {
-            tool: "idea_capture",
-            scope: "global",
-            inputs: parsed,
-            outputs: payload,
-            result_code: "ok",
-          });
-        } catch {
-          // audit failure is non-fatal for MVP; logged upstream
-        }
-
-        return payload;
-      }).catch((err: unknown) => {
-        // Defensive fallback — runTool normally handles this, but we want a
-        // terminal audit row even on the sad path.
-        const e = err instanceof McpError ? err : null;
-        const payload = failure(e?.code ?? "E_INTERNAL", e?.message ?? String(err));
-        try {
+          return success(
+            [target],
+            `Captured idea "${slug}" with ${parsed.tags.length} tag(s).`,
+            parsed.expand
+              ? { content: markdown }
+              : {
+                  expand_hint:
+                    'Call idea_capture with {"expand": true} next time to receive the rendered markdown.',
+                },
+          );
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "idea_capture",
             scope: "global",
             inputs: args,
             outputs: payload,
-            result_code: payload.code,
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return wrapResult(payload);
-      });
+        },
+      );
     },
   );
 }

@@ -74,152 +74,152 @@ export function registerReviewPrepare(server: McpServer, deps: ServerDeps): void
       inputSchema: ReviewPrepareInput.shape,
     },
     async (args: z.infer<typeof ReviewPrepareInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "review_prepare requires project scope");
-        }
-        const parsed = ReviewPrepareInput.parse(args);
-        if (!deps.config.review.categories.includes(parsed.type)) {
-          throw new McpError(
-            "E_VALIDATION",
-            `review type '${parsed.type}' not in config.review.categories (${deps.config.review.categories.join(", ")})`,
-          );
-        }
-        const root = readProjectRoot(deps);
-        if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
-
-        // Stage-entry rules.
-        if (parsed.stage > 1 && !parsed.force) {
-          const priorPass = deps.projectDb
-            .prepare(
-              `SELECT id FROM review_runs
-               WHERE type = ? AND stage = ? AND verdict = 'PASS' AND status = 'submitted'
-               ORDER BY finished_at DESC LIMIT 1`,
-            )
-            .get(parsed.type, parsed.stage - 1) as { id: string } | undefined;
-          if (!priorPass) {
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "review_prepare requires project scope");
+          }
+          const parsed = ReviewPrepareInput.parse(args);
+          if (!deps.config.review.categories.includes(parsed.type)) {
             throw new McpError(
-              "E_STATE_INVALID",
-              `Stage ${parsed.stage} (${parsed.type}) requires Stage ${parsed.stage - 1} PASS; pass force=true to override`,
+              "E_VALIDATION",
+              `review type '${parsed.type}' not in config.review.categories (${deps.config.review.categories.join(", ")})`,
             );
           }
-        }
+          const root = readProjectRoot(deps);
+          if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 
-        // Supersede any prior, non-superseded run at this exact stage.
-        deps.projectDb
-          .prepare(
-            `UPDATE review_runs SET status = 'superseded'
-             WHERE type = ? AND stage = ? AND status IN ('pending', 'running', 'submitted')`,
-          )
-          .run(parsed.type, parsed.stage);
+          // Stage-entry rules.
+          if (parsed.stage > 1 && !parsed.force) {
+            const priorPass = deps.projectDb
+              .prepare(
+                `SELECT id FROM review_runs
+                 WHERE type = ? AND stage = ? AND verdict = 'PASS' AND status = 'submitted'
+                 ORDER BY finished_at DESC LIMIT 1`,
+              )
+              .get(parsed.type, parsed.stage - 1) as { id: string } | undefined;
+            if (!priorPass) {
+              throw new McpError(
+                "E_STATE_INVALID",
+                `Stage ${parsed.stage} (${parsed.type}) requires Stage ${parsed.stage - 1} PASS; pass force=true to override`,
+              );
+            }
+          }
 
-        const ts = isoCompactNow();
-        const runId = `${parsed.type}-${parsed.stage}-${ts}`;
-        const runDir = join(root, ".review-runs", runId);
-        await assertInsideAllowedRoot(runDir, deps.config.workspace.allowed_roots);
-        await mkdir(runDir, { recursive: true });
+          // Supersede any prior, non-superseded run at this exact stage.
+          deps.projectDb
+            .prepare(
+              `UPDATE review_runs SET status = 'superseded'
+               WHERE type = ? AND stage = ? AND status IN ('pending', 'running', 'submitted')`,
+            )
+            .run(parsed.type, parsed.stage);
 
-        // Copy stage file (read-only — by convention, not filesystem-enforced).
-        const stageCopy = await copyStageFile(deps, parsed.type, parsed.stage, runDir);
-        // Copy reviewer overlay.
-        const reviewerCopy = await copyReviewerFile(deps, parsed.type, runDir);
-        // Tag-matched lenses.
-        const lenses = await selectLenses(deps, root);
+          const ts = isoCompactNow();
+          const runId = `${parsed.type}-${parsed.stage}-${ts}`;
+          const runDir = join(root, ".review-runs", runId);
+          await assertInsideAllowedRoot(runDir, deps.config.workspace.allowed_roots);
+          await mkdir(runDir, { recursive: true });
 
-        // Carry-forward: the most recent PASS at stage (N-1) owns truth.
-        const priorCf =
-          parsed.stage > 1
-            ? loadPriorCarryForward(deps, parsed.type, parsed.stage)
-            : emptyCarryForward();
-        const carryForwardPath = join(runDir, "carry-forward.yaml");
-        await writeFile(carryForwardPath, renderYaml(priorCf), "utf8");
+          // Copy stage file (read-only — by convention, not filesystem-enforced).
+          const stageCopy = await copyStageFile(deps, parsed.type, parsed.stage, runDir);
+          // Copy reviewer overlay.
+          const reviewerCopy = await copyReviewerFile(deps, parsed.type, runDir);
+          // Tag-matched lenses.
+          const lenses = await selectLenses(deps, root);
 
-        // Snapshot decision log + response log.
-        const decisionSnapshot = snapshotDecisions(deps);
-        await writeFile(join(runDir, "decisions.snapshot.md"), decisionSnapshot, "utf8");
-        const responseLogPath = join(root, "plans", "reviews", "response-log.md");
-        const responseSnapshot = existsSync(responseLogPath)
-          ? await readFile(responseLogPath, "utf8")
-          : "_no response log yet_\n";
-        await writeFile(join(runDir, "response-log.snapshot.md"), responseSnapshot, "utf8");
+          // Carry-forward: the most recent PASS at stage (N-1) owns truth.
+          const priorCf =
+            parsed.stage > 1
+              ? loadPriorCarryForward(deps, parsed.type, parsed.stage)
+              : emptyCarryForward();
+          const carryForwardPath = join(runDir, "carry-forward.yaml");
+          await writeFile(carryForwardPath, renderYaml(priorCf), "utf8");
 
-        // Scoped diff (best-effort; non-fatal if git errors).
-        let diffPath: string | null = null;
-        if (parsed.diff_ref) {
+          // Snapshot decision log + response log.
+          const decisionSnapshot = snapshotDecisions(deps);
+          await writeFile(join(runDir, "decisions.snapshot.md"), decisionSnapshot, "utf8");
+          const responseLogPath = join(root, "plans", "reviews", "response-log.md");
+          const responseSnapshot = existsSync(responseLogPath)
+            ? await readFile(responseLogPath, "utf8")
+            : "_no response log yet_\n";
+          await writeFile(join(runDir, "response-log.snapshot.md"), responseSnapshot, "utf8");
+
+          // Scoped diff (best-effort; non-fatal if git errors).
+          let diffPath: string | null = null;
+          if (parsed.diff_ref) {
+            try {
+              const git = simpleGit({ baseDir: root });
+              const diff = await git.diff([parsed.diff_ref]);
+              diffPath = join(runDir, "scoped-diff.patch");
+              await writeFile(diffPath, diff.length === 0 ? "(empty diff)\n" : diff, "utf8");
+            } catch (err) {
+              diffPath = null;
+              // Log the failure in the run dir so the reviewer can see why.
+              await writeFile(
+                join(runDir, "scoped-diff.error.txt"),
+                `failed to produce diff from ${parsed.diff_ref}: ${(err as Error).message}\n`,
+                "utf8",
+              );
+            }
+          }
+
+          // Insert a pending review_runs row.
+          const now = Date.now();
+          deps.projectDb
+            .prepare(
+              `INSERT INTO review_runs
+                 (id, type, stage, status, started_at, carry_forward_json)
+               VALUES (?, ?, ?, 'pending', ?, ?)`,
+            )
+            .run(runId, parsed.type, parsed.stage, now, JSON.stringify(priorCf));
+
+          // Advance project state to reviewing on first prepare (both DBs).
+          deps.projectDb
+            .prepare("UPDATE project SET state = 'reviewing', updated_at = ? WHERE id = 1")
+            .run(now);
           try {
-            const git = simpleGit({ baseDir: root });
-            const diff = await git.diff([parsed.diff_ref]);
-            diffPath = join(runDir, "scoped-diff.patch");
-            await writeFile(diffPath, diff.length === 0 ? "(empty diff)\n" : diff, "utf8");
-          } catch (err) {
-            diffPath = null;
-            // Log the failure in the run dir so the reviewer can see why.
-            await writeFile(
-              join(runDir, "scoped-diff.error.txt"),
-              `failed to produce diff from ${parsed.diff_ref}: ${(err as Error).message}\n`,
-              "utf8",
-            );
+            setProjectState(deps.globalDb, root, "reviewing");
+          } catch {
+            /* non-fatal */
           }
-        }
 
-        // Insert a pending review_runs row.
-        const now = Date.now();
-        deps.projectDb
-          .prepare(
-            `INSERT INTO review_runs
-               (id, type, stage, status, started_at, carry_forward_json)
-             VALUES (?, ?, ?, 'pending', ?, ?)`,
-          )
-          .run(runId, parsed.type, parsed.stage, now, JSON.stringify(priorCf));
+          const manifest = {
+            run_id: runId,
+            run_dir: runDir,
+            type: parsed.type,
+            stage: parsed.stage,
+            stage_file: stageCopy,
+            reviewer_file: reviewerCopy,
+            carry_forward_file: carryForwardPath,
+            decisions_snapshot: join(runDir, "decisions.snapshot.md"),
+            response_log_snapshot: join(runDir, "response-log.snapshot.md"),
+            diff_file: diffPath,
+            lenses,
+            force_used: parsed.force,
+          };
 
-        // Advance project state to reviewing on first prepare (both DBs).
-        deps.projectDb
-          .prepare("UPDATE project SET state = 'reviewing', updated_at = ? WHERE id = 1")
-          .run(now);
-        try {
-          setProjectState(deps.globalDb, root, "reviewing");
-        } catch {
-          /* non-fatal */
-        }
-
-        const manifest = {
-          run_id: runId,
-          run_dir: runDir,
-          type: parsed.type,
-          stage: parsed.stage,
-          stage_file: stageCopy,
-          reviewer_file: reviewerCopy,
-          carry_forward_file: carryForwardPath,
-          decisions_snapshot: join(runDir, "decisions.snapshot.md"),
-          response_log_snapshot: join(runDir, "response-log.snapshot.md"),
-          diff_file: diffPath,
-          lenses,
-          force_used: parsed.force,
-        };
-
-        const payload = success(
-          [runDir, stageCopy, reviewerCopy, carryForwardPath].filter(
-            (x): x is string => x !== null,
-          ),
-          `Prepared ${parsed.type} review stage ${parsed.stage} as run ${runId}${parsed.force ? " (force)" : ""}.`,
-          parsed.expand
-            ? { content: manifest }
-            : { expand_hint: "Call review_prepare with expand=true for the manifest." },
-        );
-        try {
+          const payload = success(
+            [runDir, stageCopy, reviewerCopy, carryForwardPath].filter(
+              (x): x is string => x !== null,
+            ),
+            `Prepared ${parsed.type} review stage ${parsed.stage} as run ${runId}${parsed.force ? " (force)" : ""}.`,
+            parsed.expand
+              ? { content: manifest }
+              : { expand_hint: "Call review_prepare with expand=true for the manifest." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "review_prepare",
             scope: "project",
-            project_root: root,
-            inputs: parsed,
+            project_root: readProjectRoot(deps),
+            inputs: args,
             outputs: payload,
-            result_code: parsed.force ? "ok" : "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

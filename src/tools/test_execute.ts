@@ -101,11 +101,15 @@ export function registerTestExecute(server: McpServer, deps: ServerDeps): void {
               stdio: ["ignore", "pipe", "pipe"],
             });
 
+            let killTimer: NodeJS.Timeout | null = null;
             const timer = setTimeout(() => {
               timedOut = true;
               child.kill("SIGTERM");
-              // Escalate if SIGTERM doesn't catch.
-              setTimeout(() => {
+              // Escalate if SIGTERM doesn't catch. Saved so finish() can
+              // clear it if the child exits between SIGTERM and SIGKILL —
+              // otherwise the callback pins child + closure refs until it
+              // fires uselessly.
+              killTimer = setTimeout(() => {
                 if (!child.killed) child.kill("SIGKILL");
               }, 2_000);
             }, parsed.timeout_ms);
@@ -134,6 +138,7 @@ export function registerTestExecute(server: McpServer, deps: ServerDeps): void {
 
             const finish = (code: number | null, sig: NodeJS.Signals | null): void => {
               clearTimeout(timer);
+              if (killTimer) clearTimeout(killTimer);
               if (signal) signal.removeEventListener("abort", onAbort);
               resolve({
                 command: parsed.command,

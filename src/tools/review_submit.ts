@@ -61,64 +61,66 @@ export function registerReviewSubmit(server: McpServer, deps: ServerDeps): void 
       inputSchema: ReviewSubmitInput.shape,
     },
     async (args: z.infer<typeof ReviewSubmitInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "review_submit requires project scope");
-        }
-        const parsed = ReviewSubmitInput.parse(args);
-        const root = readProjectRoot(deps);
-        if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "review_submit requires project scope");
+          }
+          const parsed = ReviewSubmitInput.parse(args);
+          const root = readProjectRoot(deps);
+          if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 
-        const run = deps.projectDb
-          .prepare(
-            `SELECT id, type, stage, status, carry_forward_json FROM review_runs WHERE id = ?`,
-          )
-          .get(parsed.run_id) as ReviewRunRow | undefined;
-        if (!run) {
-          throw new McpError("E_NOT_FOUND", `review run "${parsed.run_id}" does not exist`);
-        }
+          const run = deps.projectDb
+            .prepare(
+              `SELECT id, type, stage, status, carry_forward_json FROM review_runs WHERE id = ?`,
+            )
+            .get(parsed.run_id) as ReviewRunRow | undefined;
+          if (!run) {
+            throw new McpError("E_NOT_FOUND", `review run "${parsed.run_id}" does not exist`);
+          }
 
-        const { reportPath, merged } = await persistReviewSubmission({
-          projectDb: deps.projectDb,
-          allowedRoots: deps.config.workspace.allowed_roots,
-          projectRoot: root,
-          run,
-          submission: {
-            verdict: parsed.verdict,
-            summary: parsed.summary,
-            findings: parsed.findings,
-            carry_forward: parsed.carry_forward,
-          },
-        });
+          const { reportPath, merged } = await persistReviewSubmission({
+            projectDb: deps.projectDb,
+            allowedRoots: deps.config.workspace.allowed_roots,
+            projectRoot: root,
+            run,
+            submission: {
+              verdict: parsed.verdict,
+              summary: parsed.summary,
+              findings: parsed.findings,
+              carry_forward: parsed.carry_forward,
+            },
+          });
 
-        const payload = success(
-          [reportPath],
-          `Submitted ${run.type} stage ${run.stage} verdict=${parsed.verdict} for ${run.id}.`,
-          parsed.expand
-            ? {
-                content: {
-                  run_id: run.id,
-                  report_path: reportPath,
-                  verdict: parsed.verdict,
-                  carry_forward: merged,
+          const payload = success(
+            [reportPath],
+            `Submitted ${run.type} stage ${run.stage} verdict=${parsed.verdict} for ${run.id}.`,
+            parsed.expand
+              ? {
+                  content: {
+                    run_id: run.id,
+                    report_path: reportPath,
+                    verdict: parsed.verdict,
+                    carry_forward: merged,
+                  },
+                }
+              : {
+                  expand_hint: "Call review_submit with expand=true for the full content payload.",
                 },
-              }
-            : { expand_hint: "Call review_submit with expand=true for the full content payload." },
-        );
-        try {
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "review_submit",
             scope: "project",
-            project_root: root,
-            inputs: { ...parsed, summary: `<${parsed.summary.length} chars>` },
+            project_root: readProjectRoot(deps),
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

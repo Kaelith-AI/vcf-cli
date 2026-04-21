@@ -111,54 +111,66 @@ export function registerShipAudit(server: McpServer, deps: ServerDeps): void {
       inputSchema: ShipAuditInput.shape,
     },
     async (args: z.infer<typeof ShipAuditInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "ship_audit requires project scope");
-        }
-        const parsed = ShipAuditInput.parse(args);
-        const root = readProjectRoot(deps);
-        if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "ship_audit requires project scope");
+          }
+          const parsed = ShipAuditInput.parse(args);
+          const root = readProjectRoot(deps);
+          if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 
-        const include = parsed.include ? new Set(parsed.include) : null;
-        const shouldRun = (name: string): boolean => include === null || include.has(name);
+          const include = parsed.include ? new Set(parsed.include) : null;
+          const shouldRun = (name: string): boolean => include === null || include.has(name);
 
-        const files = await collectFiles(root);
-        const passes: PassResult[] = [];
+          const files = await collectFiles(root);
+          const passes: PassResult[] = [];
 
-        // Each pass short-circuits only if fail_fast=true AND the prior
-        // pass emitted a blocker.
-        const addPass = (result: PassResult): boolean => {
-          passes.push(result);
-          return result.status === "blocker" && parsed.fail_fast;
-        };
+          // Each pass short-circuits only if fail_fast=true AND the prior
+          // pass emitted a blocker.
+          const addPass = (result: PassResult): boolean => {
+            passes.push(result);
+            return result.status === "blocker" && parsed.fail_fast;
+          };
 
-        if (shouldRun("hardcoded-path")) {
-          const pass = await hardcodedPathPass(files, deps.config.workspace.allowed_roots);
-          if (addPass(pass)) return envelope(passes, parsed, root, deps);
-        }
-        if (shouldRun("secrets")) {
-          const pass = await secretsPass(files, root);
-          if (addPass(pass)) return envelope(passes, parsed, root, deps);
-        }
-        if (shouldRun("test-data-residue")) {
-          const pass = await testDataResiduePass(files);
-          if (addPass(pass)) return envelope(passes, parsed, root, deps);
-        }
-        if (shouldRun("personal-data")) {
-          const pass = await personalDataPass(files);
-          if (addPass(pass)) return envelope(passes, parsed, root, deps);
-        }
-        if (shouldRun("config-completeness")) {
-          const pass = configCompletenessPass(deps);
-          if (addPass(pass)) return envelope(passes, parsed, root, deps);
-        }
-        if (shouldRun("stale-security-todos")) {
-          const pass = await staleSecurityTodoPass(files);
-          if (addPass(pass)) return envelope(passes, parsed, root, deps);
-        }
+          if (shouldRun("hardcoded-path")) {
+            const pass = await hardcodedPathPass(files, deps.config.workspace.allowed_roots);
+            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+          }
+          if (shouldRun("secrets")) {
+            const pass = await secretsPass(files, root);
+            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+          }
+          if (shouldRun("test-data-residue")) {
+            const pass = await testDataResiduePass(files);
+            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+          }
+          if (shouldRun("personal-data")) {
+            const pass = await personalDataPass(files);
+            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+          }
+          if (shouldRun("config-completeness")) {
+            const pass = configCompletenessPass(deps);
+            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+          }
+          if (shouldRun("stale-security-todos")) {
+            const pass = await staleSecurityTodoPass(files);
+            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+          }
 
-        return envelope(passes, parsed, root, deps);
-      });
+          return envelope(passes, parsed, root, deps);
+        },
+        (payload) => {
+          writeAudit(deps.globalDb, {
+            tool: "ship_audit",
+            scope: "project",
+            project_root: readProjectRoot(deps),
+            inputs: args,
+            outputs: payload,
+            result_code: payload.ok ? "ok" : payload.code,
+          });
+        },
+      );
     },
   );
 }
@@ -433,7 +445,7 @@ function envelope(
   passes: PassResult[],
   parsed: z.infer<typeof ShipAuditInput>,
   root: string,
-  deps: ServerDeps,
+  _deps: ServerDeps,
 ): ReturnType<typeof success> {
   const anyBlocker = passes.some((p) => p.status === "blocker");
   const anyWarning = passes.some((p) => p.status === "warning");
@@ -462,18 +474,6 @@ function envelope(
           expand_hint: "Call ship_audit with expand=true for the full passes array.",
         },
   );
-  try {
-    writeAudit(deps.globalDb, {
-      tool: "ship_audit",
-      scope: "project",
-      project_root: root,
-      inputs: parsed,
-      outputs: payload,
-      result_code: anyBlocker ? "E_STATE_INVALID" : "ok",
-    });
-  } catch {
-    /* non-fatal */
-  }
   return payload;
 }
 

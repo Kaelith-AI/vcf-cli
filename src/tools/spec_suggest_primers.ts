@@ -66,89 +66,89 @@ export function registerSpecSuggestPrimers(server: McpServer, deps: ServerDeps):
       inputSchema: SuggestInput.shape,
     },
     async (args: z.infer<typeof SuggestInput>) => {
-      return runTool(async () => {
-        const parsed = SuggestInput.parse(args);
+      return runTool(
+        async () => {
+          const parsed = SuggestInput.parse(args);
 
-        // Resolve tech + lens tags.
-        let tech = parsed.tech_tags.slice();
-        let lens = parsed.lens_tags.slice();
-        if (parsed.spec_slug !== undefined) {
-          const row = deps.globalDb
-            .prepare(
-              "SELECT frontmatter_json FROM specs WHERE slug = ? ORDER BY created_at DESC LIMIT 1",
-            )
-            .get(parsed.spec_slug) as { frontmatter_json: string } | undefined;
-          if (!row) {
-            throw new McpError("E_NOT_FOUND", `no spec with slug "${parsed.spec_slug}"`);
+          // Resolve tech + lens tags.
+          let tech = parsed.tech_tags.slice();
+          let lens = parsed.lens_tags.slice();
+          if (parsed.spec_slug !== undefined) {
+            const row = deps.globalDb
+              .prepare(
+                "SELECT frontmatter_json FROM specs WHERE slug = ? ORDER BY created_at DESC LIMIT 1",
+              )
+              .get(parsed.spec_slug) as { frontmatter_json: string } | undefined;
+            if (!row) {
+              throw new McpError("E_NOT_FOUND", `no spec with slug "${parsed.spec_slug}"`);
+            }
+            const fm = safeJson(row.frontmatter_json) as {
+              tech_stack?: string[];
+              lens?: string[];
+            } | null;
+            if (fm?.tech_stack) tech = Array.from(new Set([...tech, ...fm.tech_stack]));
+            if (fm?.lens) lens = Array.from(new Set([...lens, ...fm.lens]));
           }
-          const fm = safeJson(row.frontmatter_json) as {
-            tech_stack?: string[];
-            lens?: string[];
-          } | null;
-          if (fm?.tech_stack) tech = Array.from(new Set([...tech, ...fm.tech_stack]));
-          if (fm?.lens) lens = Array.from(new Set([...lens, ...fm.lens]));
-        }
 
-        if (tech.length === 0 && lens.length === 0) {
-          throw new McpError(
-            "E_VALIDATION",
-            "spec_suggest_primers: no tags available after merging spec + explicit args",
-          );
-        }
-
-        const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
-        const kindFilter = new Set(parsed.kinds);
-        const filtered = entries.filter((e) => kindFilter.has(e.kind));
-
-        // Tag-only baseline: we always compute this so blending can layer on
-        // top and fallback is automatic when embeddings are unavailable.
-        const tagResults = matchPrimers(filtered, {
-          tech_tags: tech,
-          lens_tags: lens,
-          // Do not slice yet — blend may reorder.
-        });
-
-        let results = tagResults;
-        let scoring: "tag" | "blended" = "tag";
-        if (deps.config.embeddings) {
-          const blended = await tryBlend(deps, tech, lens, tagResults);
-          if (blended !== null) {
-            results = blended;
-            scoring = "blended";
+          if (tech.length === 0 && lens.length === 0) {
+            throw new McpError(
+              "E_VALIDATION",
+              "spec_suggest_primers: no tags available after merging spec + explicit args",
+            );
           }
-        }
-        if (typeof parsed.limit === "number") results = results.slice(0, parsed.limit);
 
-        const payload = success(
-          results.map((r) => r.path),
-          `Suggested ${results.length} KB entr(y|ies) for ${tech.length}+${lens.length} tag(s) [${scoring}].`,
-          parsed.expand
-            ? {
-                content: {
-                  tech_tags: tech,
-                  lens_tags: lens,
-                  scoring,
-                  suggestions: results,
+          const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
+          const kindFilter = new Set(parsed.kinds);
+          const filtered = entries.filter((e) => kindFilter.has(e.kind));
+
+          // Tag-only baseline: we always compute this so blending can layer on
+          // top and fallback is automatic when embeddings are unavailable.
+          const tagResults = matchPrimers(filtered, {
+            tech_tags: tech,
+            lens_tags: lens,
+            // Do not slice yet — blend may reorder.
+          });
+
+          let results = tagResults;
+          let scoring: "tag" | "blended" = "tag";
+          if (deps.config.embeddings) {
+            const blended = await tryBlend(deps, tech, lens, tagResults);
+            if (blended !== null) {
+              results = blended;
+              scoring = "blended";
+            }
+          }
+          if (typeof parsed.limit === "number") results = results.slice(0, parsed.limit);
+
+          const payload = success(
+            results.map((r) => r.path),
+            `Suggested ${results.length} KB entr(y|ies) for ${tech.length}+${lens.length} tag(s) [${scoring}].`,
+            parsed.expand
+              ? {
+                  content: {
+                    tech_tags: tech,
+                    lens_tags: lens,
+                    scoring,
+                    suggestions: results,
+                  },
+                }
+              : {
+                  expand_hint:
+                    "Call spec_suggest_primers with expand=true to receive the ranked list.",
                 },
-              }
-            : {
-                expand_hint:
-                  "Call spec_suggest_primers with expand=true to receive the ranked list.",
-              },
-        );
-        try {
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "spec_suggest_primers",
             scope: "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

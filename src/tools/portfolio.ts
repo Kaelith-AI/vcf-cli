@@ -32,29 +32,29 @@ export function registerProjectList(server: McpServer, deps: ServerDeps): void {
       inputSchema: ProjectListInput.shape,
     },
     async (args: z.infer<typeof ProjectListInput>) => {
-      return runTool(async () => {
-        const parsed = ProjectListInput.parse(args);
-        const rows = listProjects(deps.globalDb);
-        const payload = success(
-          rows.map((r) => r.root_path),
-          `project_list: ${rows.length} project(s) registered`,
-          parsed.expand
-            ? { content: { projects: rows } }
-            : { expand_hint: "Call project_list with expand=true for the full list." },
-        );
-        try {
+      return runTool(
+        async () => {
+          const parsed = ProjectListInput.parse(args);
+          const rows = listProjects(deps.globalDb);
+          const payload = success(
+            rows.map((r) => r.root_path),
+            `project_list: ${rows.length} project(s) registered`,
+            parsed.expand
+              ? { content: { projects: rows } }
+              : { expand_hint: "Call project_list with expand=true for the full list." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "project_list",
             scope: "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }
@@ -78,47 +78,47 @@ export function registerPortfolioGraph(server: McpServer, deps: ServerDeps): voi
       inputSchema: PortfolioGraphInput.shape,
     },
     async (args: z.infer<typeof PortfolioGraphInput>) => {
-      return runTool(async () => {
-        const parsed = PortfolioGraphInput.parse(args);
-        const all = listProjects(deps.globalDb);
-        const filtered = parsed.include_shipped
-          ? all
-          : all.filter((p) => p.state_cache !== "shipped");
-        const blockers = computeBlockers(filtered);
-        const unblocked = computeUnblockedIfShips(filtered);
+      return runTool(
+        async () => {
+          const parsed = PortfolioGraphInput.parse(args);
+          const all = listProjects(deps.globalDb);
+          const filtered = parsed.include_shipped
+            ? all
+            : all.filter((p) => p.state_cache !== "shipped");
+          const blockers = computeBlockers(filtered);
+          const unblocked = computeUnblockedIfShips(filtered);
 
-        const graph = {
-          projects: filtered.map((p) => ({
-            name: p.name,
-            state: p.state_cache,
-            root: p.root_path,
-            depends_on: p.depends_on,
-            last_seen_at: p.last_seen_at,
-          })),
-          blockers,
-          unblocked_if_ships: unblocked,
-        };
+          const graph = {
+            projects: filtered.map((p) => ({
+              name: p.name,
+              state: p.state_cache,
+              root: p.root_path,
+              depends_on: p.depends_on,
+              last_seen_at: p.last_seen_at,
+            })),
+            blockers,
+            unblocked_if_ships: unblocked,
+          };
 
-        const payload = success(
-          filtered.map((p) => p.root_path),
-          `portfolio_graph: ${filtered.length} active project(s), ${blockers.length} blocker edge(s)`,
-          parsed.expand
-            ? { content: graph }
-            : { expand_hint: "Call portfolio_graph with expand=true for the full graph." },
-        );
-        try {
+          const payload = success(
+            filtered.map((p) => p.root_path),
+            `portfolio_graph: ${filtered.length} active project(s), ${blockers.length} blocker edge(s)`,
+            parsed.expand
+              ? { content: graph }
+              : { expand_hint: "Call portfolio_graph with expand=true for the full graph." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "portfolio_graph",
             scope: "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

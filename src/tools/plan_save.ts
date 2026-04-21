@@ -49,95 +49,98 @@ export function registerPlanSave(server: McpServer, deps: ServerDeps): void {
       inputSchema: PlanSaveInput.shape,
     },
     async (args: z.infer<typeof PlanSaveInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "plan_save requires project scope");
-        }
-        const parsed = PlanSaveInput.parse(args);
-        const projectRoot = readProjectRoot(deps);
-        if (!projectRoot) {
-          throw new McpError("E_STATE_INVALID", "project row missing; re-run vcf init");
-        }
-        const plansDir = join(projectRoot, "plans");
-        await assertInsideAllowedRoot(plansDir, deps.config.workspace.allowed_roots);
-        await mkdir(plansDir, { recursive: true });
+      // Redacted inputs captured during body; large plan/todo/manifest
+      // strings never land in the audit log.
+      let auditInputs: unknown = args;
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "plan_save requires project scope");
+          }
+          const parsed = PlanSaveInput.parse(args);
+          auditInputs = {
+            ...parsed,
+            plan: `<${parsed.plan.length} chars>`,
+            todo: `<${parsed.todo.length} chars>`,
+            manifest: `<${parsed.manifest.length} chars>`,
+          };
+          const projectRoot = readProjectRoot(deps);
+          if (!projectRoot) {
+            throw new McpError("E_STATE_INVALID", "project row missing; re-run vcf init");
+          }
+          const plansDir = join(projectRoot, "plans");
+          await assertInsideAllowedRoot(plansDir, deps.config.workspace.allowed_roots);
+          await mkdir(plansDir, { recursive: true });
 
-        const targets: Array<[string, string]> = [
-          [join(plansDir, `${parsed.name}-plan.md`), parsed.plan],
-          [join(plansDir, `${parsed.name}-todo.md`), parsed.todo],
-          [join(plansDir, `${parsed.name}-manifest.md`), parsed.manifest],
-        ];
+          const targets: Array<[string, string]> = [
+            [join(plansDir, `${parsed.name}-plan.md`), parsed.plan],
+            [join(plansDir, `${parsed.name}-todo.md`), parsed.todo],
+            [join(plansDir, `${parsed.name}-manifest.md`), parsed.manifest],
+          ];
 
-        // Overwrite policy — atomic-ish: check all first, then write.
-        if (!parsed.force) {
-          for (const [target] of targets) {
-            if (await exists(target)) {
-              throw new McpError(
-                "E_ALREADY_EXISTS",
-                `${target} already exists — pass force=true to overwrite the plan`,
-              );
+          // Overwrite policy — atomic-ish: check all first, then write.
+          if (!parsed.force) {
+            for (const [target] of targets) {
+              if (await exists(target)) {
+                throw new McpError(
+                  "E_ALREADY_EXISTS",
+                  `${target} already exists — pass force=true to overwrite the plan`,
+                );
+              }
             }
           }
-        }
 
-        const written: string[] = [];
-        for (const [target, content] of targets) {
-          await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
-          await writeFile(target, content, "utf8");
-          written.push(target);
-          indexArtifact(deps, target, kindOf(target), content);
-        }
+          const written: string[] = [];
+          for (const [target, content] of targets) {
+            await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
+            await writeFile(target, content, "utf8");
+            written.push(target);
+            indexArtifact(deps, target, kindOf(target), content);
+          }
 
-        // Advance project state in both the per-project DB (authoritative)
-        // and the global registry's state_cache (fast portfolio_graph lookup).
-        const now = Date.now();
-        deps.projectDb
-          .prepare("UPDATE project SET state = ?, updated_at = ? WHERE id = 1")
-          .run(parsed.advance_state, now);
-        try {
-          setProjectState(deps.globalDb, projectRoot, parsed.advance_state);
-        } catch {
-          /* non-fatal — registry is opt-in */
-        }
+          // Advance project state in both the per-project DB (authoritative)
+          // and the global registry's state_cache (fast portfolio_graph lookup).
+          const now = Date.now();
+          deps.projectDb
+            .prepare("UPDATE project SET state = ?, updated_at = ? WHERE id = 1")
+            .run(parsed.advance_state, now);
+          try {
+            setProjectState(deps.globalDb, projectRoot, parsed.advance_state);
+          } catch {
+            /* non-fatal — registry is opt-in */
+          }
 
-        // Project the plan's `depends_on:` frontmatter into the registry so
-        // portfolio_graph can render blockers without re-reading files.
-        try {
-          const deps_on = parseDependsOn(parsed.plan);
-          setProjectDependsOn(deps.globalDb, projectRoot, deps_on);
-        } catch {
-          /* non-fatal */
-        }
+          // Project the plan's `depends_on:` frontmatter into the registry so
+          // portfolio_graph can render blockers without re-reading files.
+          try {
+            const deps_on = parseDependsOn(parsed.plan);
+            setProjectDependsOn(deps.globalDb, projectRoot, deps_on);
+          } catch {
+            /* non-fatal */
+          }
 
-        const payload = success(
-          written,
-          `Saved plan "${parsed.name}" (3 files) and advanced project state → ${parsed.advance_state}.`,
-          parsed.expand
-            ? { content: { written, state: parsed.advance_state } }
-            : {
-                expand_hint:
-                  "Call plan_save with expand=true to receive the file list + new state.",
-              },
-        );
-        try {
+          return success(
+            written,
+            `Saved plan "${parsed.name}" (3 files) and advanced project state → ${parsed.advance_state}.`,
+            parsed.expand
+              ? { content: { written, state: parsed.advance_state } }
+              : {
+                  expand_hint:
+                    "Call plan_save with expand=true to receive the file list + new state.",
+                },
+          );
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "plan_save",
             scope: "project",
-            project_root: projectRoot,
-            inputs: {
-              ...parsed,
-              plan: `<${parsed.plan.length} chars>`,
-              todo: `<${parsed.todo.length} chars>`,
-              manifest: `<${parsed.manifest.length} chars>`,
-            },
+            project_root: readProjectRoot(deps),
+            inputs: auditInputs,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

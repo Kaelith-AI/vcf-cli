@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { writeAudit } from "../util/audit.js";
+import { queryAll } from "../util/db.js";
 
 const IdeaSearchInput = z
   .object({
@@ -26,13 +27,13 @@ const IdeaSearchInput = z
   })
   .strict();
 
-interface IdeaRow {
-  path: string;
-  slug: string;
-  tags: string; // JSON array
-  created_at: number;
-  frontmatter_json: string;
-}
+const IdeaRowSchema = z.object({
+  path: z.string(),
+  slug: z.string(),
+  tags: z.string(), // JSON array
+  created_at: z.number(),
+  frontmatter_json: z.string(),
+});
 
 export function registerIdeaSearch(server: McpServer, deps: ServerDeps): void {
   server.registerTool(
@@ -44,65 +45,66 @@ export function registerIdeaSearch(server: McpServer, deps: ServerDeps): void {
       inputSchema: IdeaSearchInput.shape,
     },
     async (args: z.infer<typeof IdeaSearchInput>) => {
-      return runTool(async () => {
-        const parsed = IdeaSearchInput.parse(args);
+      return runTool(
+        async () => {
+          const parsed = IdeaSearchInput.parse(args);
 
-        // Build WHERE clause. `tags` is stored as JSON; we use SQLite's
-        // json_each view via LIKE-match on the stringified JSON for the
-        // AND filter. This is O(rows) but the table is small.
-        const clauses: string[] = [];
-        const params: (string | number)[] = [];
-        if (parsed.query !== undefined && parsed.query.length > 0) {
-          clauses.push("(slug LIKE ? OR lower(frontmatter_json) LIKE ?)");
-          const like = `%${parsed.query.toLowerCase()}%`;
-          params.push(like, like);
-        }
-        for (const tag of parsed.tags) {
-          // Match '"tag"' inside the JSON array — cheap and works without JSON1 extension.
-          clauses.push("tags LIKE ?");
-          params.push(`%"${tag}"%`);
-        }
-        const where = clauses.length > 0 ? "WHERE " + clauses.join(" AND ") : "";
-        const rows = deps.globalDb
-          .prepare(
+          // Build WHERE clause. `tags` is stored as JSON; we use SQLite's
+          // json_each view via LIKE-match on the stringified JSON for the
+          // AND filter. This is O(rows) but the table is small.
+          const clauses: string[] = [];
+          const params: (string | number)[] = [];
+          if (parsed.query !== undefined && parsed.query.length > 0) {
+            clauses.push("(slug LIKE ? OR lower(frontmatter_json) LIKE ?)");
+            const like = `%${parsed.query.toLowerCase()}%`;
+            params.push(like, like);
+          }
+          for (const tag of parsed.tags) {
+            // Match '"tag"' inside the JSON array — cheap and works without JSON1 extension.
+            clauses.push("tags LIKE ?");
+            params.push(`%"${tag}"%`);
+          }
+          const where = clauses.length > 0 ? "WHERE " + clauses.join(" AND ") : "";
+          const rows = queryAll(
+            deps.globalDb,
             `SELECT path, slug, tags, created_at, frontmatter_json FROM ideas ${where}
              ORDER BY created_at DESC LIMIT ?`,
-          )
-          .all(...params, parsed.limit) as unknown as IdeaRow[];
+            IdeaRowSchema,
+            [...params, parsed.limit],
+          );
 
-        const hits = rows.map((r) => {
-          const fm = safeParseJson(r.frontmatter_json) as { title?: string } | null;
-          return {
-            path: r.path,
-            slug: r.slug,
-            title: fm?.title ?? r.slug,
-            tags: safeParseJson(r.tags) ?? [],
-            created_at: r.created_at,
-          };
-        });
+          const hits = rows.map((r) => {
+            const fm = safeParseJson(r.frontmatter_json) as { title?: string } | null;
+            return {
+              path: r.path,
+              slug: r.slug,
+              title: fm?.title ?? r.slug,
+              tags: safeParseJson(r.tags) ?? [],
+              created_at: r.created_at,
+            };
+          });
 
-        const payload = success(
-          hits.map((h) => h.path),
-          `Found ${hits.length} idea(s) matching ${summarizeQuery(parsed)}.`,
-          parsed.expand
-            ? { content: hits }
-            : {
-                expand_hint: "Call idea_search with expand=true to include the full hit list.",
-              },
-        );
-        try {
+          const payload = success(
+            hits.map((h) => h.path),
+            `Found ${hits.length} idea(s) matching ${summarizeQuery(parsed)}.`,
+            parsed.expand
+              ? { content: hits }
+              : {
+                  expand_hint: "Call idea_search with expand=true to include the full hit list.",
+                },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "idea_search",
             scope: "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

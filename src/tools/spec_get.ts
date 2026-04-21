@@ -10,7 +10,10 @@ import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { writeAudit } from "../util/audit.js";
+import { queryRow } from "../util/db.js";
 import { McpError } from "../errors.js";
+
+const SpecPathRowSchema = z.object({ path: z.string() });
 
 const SpecGetInput = z
   .object({
@@ -33,50 +36,56 @@ export function registerSpecGet(server: McpServer, deps: ServerDeps): void {
       inputSchema: SpecGetInput.shape,
     },
     async (args: z.infer<typeof SpecGetInput>) => {
-      return runTool(async () => {
-        const parsed = SpecGetInput.parse(args);
-        let path: string;
-        if (parsed.path !== undefined) {
-          path = parsed.path;
-        } else {
-          // Zod refine guarantees slug is defined when path is absent.
-          const slug = parsed.slug!;
-          const row = deps.globalDb
-            .prepare("SELECT path FROM specs WHERE slug = ? ORDER BY created_at DESC LIMIT 1")
-            .get(slug) as unknown as { path: string } | undefined;
-          if (!row) throw new McpError("E_NOT_FOUND", `no spec with slug "${slug}"`);
-          path = row.path;
-        }
-        const canonical = await assertInsideAllowedRoot(path, deps.config.workspace.allowed_roots);
-        let body: string;
-        try {
-          body = await readFile(canonical, "utf8");
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-            throw new McpError("E_NOT_FOUND", `spec file missing: ${canonical}`);
+      return runTool(
+        async () => {
+          const parsed = SpecGetInput.parse(args);
+          let path: string;
+          if (parsed.path !== undefined) {
+            path = parsed.path;
+          } else {
+            // Zod refine guarantees slug is defined when path is absent.
+            const slug = parsed.slug!;
+            const row = queryRow(
+              deps.globalDb,
+              "SELECT path FROM specs WHERE slug = ? ORDER BY created_at DESC LIMIT 1",
+              SpecPathRowSchema,
+              [slug],
+            );
+            if (!row) throw new McpError("E_NOT_FOUND", `no spec with slug "${slug}"`);
+            path = row.path;
           }
-          throw err;
-        }
-        const payload = success(
-          [canonical],
-          `Fetched spec at ${canonical} (${body.length} bytes).`,
-          parsed.expand
-            ? { content: body }
-            : { expand_hint: "Call spec_get with expand=true to include the file body." },
-        );
-        try {
+          const canonical = await assertInsideAllowedRoot(
+            path,
+            deps.config.workspace.allowed_roots,
+          );
+          let body: string;
+          try {
+            body = await readFile(canonical, "utf8");
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+              throw new McpError("E_NOT_FOUND", `spec file missing: ${canonical}`);
+            }
+            throw err;
+          }
+          const payload = success(
+            [canonical],
+            `Fetched spec at ${canonical} (${body.length} bytes).`,
+            parsed.expand
+              ? { content: body }
+              : { expand_hint: "Call spec_get with expand=true to include the file body." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "spec_get",
             scope: "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

@@ -76,102 +76,102 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
       inputSchema: SpecSaveInput.shape,
     },
     async (args: z.infer<typeof SpecSaveInput>) => {
-      return runTool(async () => {
-        const parsed = SpecSaveInput.parse(args);
-        const fm = extractFrontmatter(parsed.content);
-        if (!fm) {
-          throw new McpError(
-            "E_VALIDATION",
-            "spec content must start with a YAML frontmatter block (--- ... ---)",
+      return runTool(
+        async () => {
+          const parsed = SpecSaveInput.parse(args);
+          const fm = extractFrontmatter(parsed.content);
+          if (!fm) {
+            throw new McpError(
+              "E_VALIDATION",
+              "spec content must start with a YAML frontmatter block (--- ... ---)",
+            );
+          }
+          const fmResult = FrontmatterSchema.safeParse(fm);
+          if (!fmResult.success) {
+            throw new McpError("E_VALIDATION", "spec frontmatter failed schema validation", {
+              issues: fmResult.error.issues,
+            });
+          }
+          const validated = fmResult.data;
+          const slug = parsed.slug ?? slugify(validated.title);
+          const date = validated.created.slice(0, 10);
+          const specsDir = deps.config.workspace.specs_dir;
+          await assertInsideAllowedRoot(specsDir, deps.config.workspace.allowed_roots);
+          await mkdir(specsDir, { recursive: true });
+
+          const filename = `${date}-${slug}.md`;
+          const target = join(specsDir, filename);
+          await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
+
+          // Overwrite policy.
+          let exists = false;
+          try {
+            await stat(target);
+            exists = true;
+          } catch {
+            /* not present */
+          }
+          if (exists && !parsed.force) {
+            throw new McpError(
+              "E_ALREADY_EXISTS",
+              `${target} already exists — pass force=true to overwrite`,
+            );
+          }
+
+          await writeFile(target, parsed.content, { encoding: "utf8" });
+
+          // Index.
+          const allTags = Array.from(
+            new Set([...validated.tech_stack, ...validated.tags, ...validated.lens]),
           );
-        }
-        const fmResult = FrontmatterSchema.safeParse(fm);
-        if (!fmResult.success) {
-          throw new McpError("E_VALIDATION", "spec frontmatter failed schema validation", {
-            issues: fmResult.error.issues,
-          });
-        }
-        const validated = fmResult.data;
-        const slug = parsed.slug ?? slugify(validated.title);
-        const date = validated.created.slice(0, 10);
-        const specsDir = deps.config.workspace.specs_dir;
-        await assertInsideAllowedRoot(specsDir, deps.config.workspace.allowed_roots);
-        await mkdir(specsDir, { recursive: true });
+          deps.globalDb
+            .prepare(
+              `INSERT INTO specs (path, slug, tags, status, created_at, frontmatter_json)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(path) DO UPDATE SET
+                 slug = excluded.slug,
+                 tags = excluded.tags,
+                 status = excluded.status,
+                 frontmatter_json = excluded.frontmatter_json`,
+            )
+            .run(
+              target,
+              slug,
+              JSON.stringify(allTags),
+              validated.status,
+              Date.parse(validated.created) || Date.now(),
+              JSON.stringify(validated),
+            );
 
-        const filename = `${date}-${slug}.md`;
-        const target = join(specsDir, filename);
-        await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
-
-        // Overwrite policy.
-        let exists = false;
-        try {
-          await stat(target);
-          exists = true;
-        } catch {
-          /* not present */
-        }
-        if (exists && !parsed.force) {
-          throw new McpError(
-            "E_ALREADY_EXISTS",
-            `${target} already exists — pass force=true to overwrite`,
-          );
-        }
-
-        await writeFile(target, parsed.content, { encoding: "utf8" });
-
-        // Index.
-        const allTags = Array.from(
-          new Set([...validated.tech_stack, ...validated.tags, ...validated.lens]),
-        );
-        deps.globalDb
-          .prepare(
-            `INSERT INTO specs (path, slug, tags, status, created_at, frontmatter_json)
-             VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT(path) DO UPDATE SET
-               slug = excluded.slug,
-               tags = excluded.tags,
-               status = excluded.status,
-               frontmatter_json = excluded.frontmatter_json`,
-          )
-          .run(
-            target,
-            slug,
-            JSON.stringify(allTags),
-            validated.status,
-            Date.parse(validated.created) || Date.now(),
-            JSON.stringify(validated),
-          );
-
-        const payload = success(
-          [target],
-          `Saved spec "${validated.title}" -> ${filename} (status=${validated.status}, tech_stack=${validated.tech_stack.length} tag(s)).`,
-          parsed.expand
-            ? {
-                content: {
-                  path: target,
-                  slug,
-                  date,
-                  frontmatter: validated,
+          const payload = success(
+            [target],
+            `Saved spec "${validated.title}" -> ${filename} (status=${validated.status}, tech_stack=${validated.tech_stack.length} tag(s)).`,
+            parsed.expand
+              ? {
+                  content: {
+                    path: target,
+                    slug,
+                    date,
+                    frontmatter: validated,
+                  },
+                }
+              : {
+                  expand_hint:
+                    "Call spec_save with expand=true to receive the normalized frontmatter.",
                 },
-              }
-            : {
-                expand_hint:
-                  "Call spec_save with expand=true to receive the normalized frontmatter.",
-              },
-        );
-        try {
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "spec_save",
             scope: "global",
-            inputs: { ...parsed, content: `<${parsed.content.length} chars>` },
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

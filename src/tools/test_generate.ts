@@ -81,57 +81,57 @@ export function registerTestGenerate(server: McpServer, deps: ServerDeps): void 
       inputSchema: TestGenerateInput.shape,
     },
     async (args: z.infer<typeof TestGenerateInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "test_generate requires project scope");
-        }
-        const parsed = TestGenerateInput.parse(args);
-        const scale = parsed.scale_target ?? 1000;
-        const tenX = scale * 10;
-
-        const stubs: Stub[] = [];
-        for (const kind of parsed.kinds) {
-          if (FANNABLE_KINDS.has(kind)) {
-            const deps_ = parsed.dependencies.length > 0 ? parsed.dependencies : ["generic"];
-            for (const dep of deps_) {
-              const { filename, body } = buildStub(kind, { dep, scale, tenX });
-              stubs.push({
-                kind,
-                dependency: dep === "generic" ? null : dep,
-                filename,
-                body,
-              });
-            }
-          } else {
-            const { filename, body } = buildStub(kind, { dep: "generic", scale, tenX });
-            stubs.push({ kind, dependency: null, filename, body });
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "test_generate requires project scope");
           }
-        }
+          const parsed = TestGenerateInput.parse(args);
+          const scale = parsed.scale_target ?? 1000;
+          const tenX = scale * 10;
 
-        const summary =
-          `Generated ${stubs.length} test stub(s) across ${parsed.kinds.length} kind(s)` +
-          (parsed.dependencies.length > 0 ? ` × ${parsed.dependencies.length} dep(s).` : ".");
-        const payload = success(
-          [],
-          summary,
-          parsed.expand
-            ? { content: { stubs } }
-            : { expand_hint: "Call test_generate with expand=true to receive the stub bodies." },
-        );
-        try {
+          const stubs: Stub[] = [];
+          for (const kind of parsed.kinds) {
+            if (FANNABLE_KINDS.has(kind)) {
+              const deps_ = parsed.dependencies.length > 0 ? parsed.dependencies : ["generic"];
+              for (const dep of deps_) {
+                const { filename, body } = buildStub(kind, { dep, scale, tenX });
+                stubs.push({
+                  kind,
+                  dependency: dep === "generic" ? null : dep,
+                  filename,
+                  body,
+                });
+              }
+            } else {
+              const { filename, body } = buildStub(kind, { dep: "generic", scale, tenX });
+              stubs.push({ kind, dependency: null, filename, body });
+            }
+          }
+
+          const summary =
+            `Generated ${stubs.length} test stub(s) across ${parsed.kinds.length} kind(s)` +
+            (parsed.dependencies.length > 0 ? ` × ${parsed.dependencies.length} dep(s).` : ".");
+          const payload = success(
+            [],
+            summary,
+            parsed.expand
+              ? { content: { stubs } }
+              : { expand_hint: "Call test_generate with expand=true to receive the stub bodies." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "test_generate",
             scope: "project",
             project_root: readProjectRoot(deps),
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

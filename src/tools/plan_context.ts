@@ -54,92 +54,96 @@ export function registerPlanContext(server: McpServer, deps: ServerDeps): void {
       inputSchema: PlanContextInput.shape,
     },
     async (args: z.infer<typeof PlanContextInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError(
-            "E_STATE_INVALID",
-            "plan_context requires project scope — server booted without a project DB",
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError(
+              "E_STATE_INVALID",
+              "plan_context requires project scope — server booted without a project DB",
+            );
+          }
+          const parsed = PlanContextInput.parse(args);
+
+          // Resolve spec.
+          const specPath = parsed.spec_path ?? readProjectSpecPath(deps);
+          if (!specPath) {
+            throw new McpError(
+              "E_STATE_INVALID",
+              "no spec_path configured for this project — pass spec_path or re-run project_init with --spec_path",
+            );
+          }
+          const specAbs = await assertInsideAllowedRoot(
+            specPath,
+            deps.config.workspace.allowed_roots,
           );
-        }
-        const parsed = PlanContextInput.parse(args);
+          if (!existsSync(specAbs)) {
+            throw new McpError("E_NOT_FOUND", `spec file missing: ${specAbs}`);
+          }
+          const specBody = await readFile(specAbs, "utf8");
+          const specFm = extractFrontmatter(specBody);
+          const techTags = toStringArray(specFm?.["tech_stack"]);
+          const lensTags = toStringArray(specFm?.["lens"]);
 
-        // Resolve spec.
-        const specPath = parsed.spec_path ?? readProjectSpecPath(deps);
-        if (!specPath) {
-          throw new McpError(
-            "E_STATE_INVALID",
-            "no spec_path configured for this project — pass spec_path or re-run project_init with --spec_path",
+          // KB loads.
+          const planner = await readTemplate("planner.md.tpl");
+          const standards = await readOptionalKbFile(
+            deps,
+            join("standards", "company-standards.md"),
           );
-        }
-        const specAbs = await assertInsideAllowedRoot(
-          specPath,
-          deps.config.workspace.allowed_roots,
-        );
-        if (!existsSync(specAbs)) {
-          throw new McpError("E_NOT_FOUND", `spec file missing: ${specAbs}`);
-        }
-        const specBody = await readFile(specAbs, "utf8");
-        const specFm = extractFrontmatter(specBody);
-        const techTags = toStringArray(specFm?.["tech_stack"]);
-        const lensTags = toStringArray(specFm?.["lens"]);
+          const vibePrimer = await readOptionalKbFile(
+            deps,
+            join("standards", "vibe-coding-primer.md"),
+          );
 
-        // KB loads.
-        const planner = await readTemplate("planner.md.tpl");
-        const standards = await readOptionalKbFile(deps, join("standards", "company-standards.md"));
-        const vibePrimer = await readOptionalKbFile(
-          deps,
-          join("standards", "vibe-coding-primer.md"),
-        );
+          // Tag-matched primers.
+          const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
+          const kinds = new Set(["primer", "best-practice"]);
+          const suggestions = matchPrimers(
+            entries.filter((e) => kinds.has(e.kind)),
+            {
+              tech_tags: techTags,
+              lens_tags: lensTags,
+              limit: parsed.limit_primers,
+            },
+          );
 
-        // Tag-matched primers.
-        const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
-        const kinds = new Set(["primer", "best-practice"]);
-        const suggestions = matchPrimers(
-          entries.filter((e) => kinds.has(e.kind)),
-          {
+          const targetOut = planOutputPaths(deps, parsed.name);
+
+          const contextContent = {
+            name: parsed.name,
+            spec_path: specAbs,
+            output_targets: targetOut,
+            planner_md: planner,
+            standards_md: standards,
+            vibe_primer_md: vibePrimer,
+            spec_md: specBody,
+            suggested_primers: suggestions,
             tech_tags: techTags,
             lens_tags: lensTags,
-            limit: parsed.limit_primers,
-          },
-        );
-
-        const targetOut = planOutputPaths(deps, parsed.name);
-
-        const contextContent = {
-          name: parsed.name,
-          spec_path: specAbs,
-          output_targets: targetOut,
-          planner_md: planner,
-          standards_md: standards,
-          vibe_primer_md: vibePrimer,
-          spec_md: specBody,
-          suggested_primers: suggestions,
-          tech_tags: techTags,
-          lens_tags: lensTags,
-        };
-        const payload = success(
-          [specAbs, ...suggestions.map((s) => s.path)].slice(0, 10),
-          `Plan context assembled for "${parsed.name}": ${suggestions.length} primer(s), ${techTags.length} tech tag(s).`,
-          parsed.expand
-            ? { content: contextContent }
-            : {
-                expand_hint: "Call plan_context with expand=true to receive the assembled payload.",
-              },
-        );
-        try {
+          };
+          const payload = success(
+            [specAbs, ...suggestions.map((s) => s.path)].slice(0, 10),
+            `Plan context assembled for "${parsed.name}": ${suggestions.length} primer(s), ${techTags.length} tech tag(s).`,
+            parsed.expand
+              ? { content: contextContent }
+              : {
+                  expand_hint:
+                    "Call plan_context with expand=true to receive the assembled payload.",
+                },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "plan_context",
             scope: "project",
             project_root: readProjectRootPath(deps),
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

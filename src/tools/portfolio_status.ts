@@ -38,61 +38,66 @@ export function registerPortfolioStatus(server: McpServer, deps: ServerDeps): vo
       inputSchema: PortfolioStatusInput.shape,
     },
     async (args: z.infer<typeof PortfolioStatusInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError(
-            "E_STATE_INVALID",
-            "portfolio_status requires project scope — server booted without a project DB",
-          );
-        }
-        const parsed = PortfolioStatusInput.parse(args);
-        const row = deps.projectDb
-          .prepare(`SELECT name, root_path, state, updated_at, spec_path FROM project WHERE id = 1`)
-          .get() as
-          | {
-              name: string;
-              root_path: string;
-              state: ProjectState;
-              updated_at: number;
-              spec_path: string | null;
-            }
-          | undefined;
-        if (!row) {
-          throw new McpError("E_NOT_FOUND", "project row missing — run vcf init to re-scaffold");
-        }
-        const summary = `${row.name}: state=${row.state}; next → ${NEXT_ACTION[row.state]}`;
-        const payload = success([row.root_path], summary, {
-          ...(parsed.expand
-            ? {
-                content: {
-                  name: row.name,
-                  root_path: row.root_path,
-                  state: row.state,
-                  updated_at_iso: new Date(row.updated_at).toISOString(),
-                  spec_path: row.spec_path,
-                  next_action: NEXT_ACTION[row.state],
-                },
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError(
+              "E_STATE_INVALID",
+              "portfolio_status requires project scope — server booted without a project DB",
+            );
+          }
+          const parsed = PortfolioStatusInput.parse(args);
+          const row = deps.projectDb
+            .prepare(
+              `SELECT name, root_path, state, updated_at, spec_path FROM project WHERE id = 1`,
+            )
+            .get() as
+            | {
+                name: string;
+                root_path: string;
+                state: ProjectState;
+                updated_at: number;
+                spec_path: string | null;
               }
-            : {
-                expand_hint: "Call portfolio_status with expand=true for the full metadata block.",
-              }),
-        });
+            | undefined;
+          if (!row) {
+            throw new McpError("E_NOT_FOUND", "project row missing — run vcf init to re-scaffold");
+          }
+          const summary = `${row.name}: state=${row.state}; next → ${NEXT_ACTION[row.state]}`;
+          const payload = success([row.root_path], summary, {
+            ...(parsed.expand
+              ? {
+                  content: {
+                    name: row.name,
+                    root_path: row.root_path,
+                    state: row.state,
+                    updated_at_iso: new Date(row.updated_at).toISOString(),
+                    spec_path: row.spec_path,
+                    next_action: NEXT_ACTION[row.state],
+                  },
+                }
+              : {
+                  expand_hint:
+                    "Call portfolio_status with expand=true for the full metadata block.",
+                }),
+          });
 
-        try {
+          return payload;
+        },
+        (payload) => {
+          const pr = deps.projectDb?.prepare("SELECT root_path FROM project WHERE id=1").get() as
+            | { root_path: string }
+            | undefined;
           writeAudit(deps.globalDb, {
             tool: "portfolio_status",
             scope: "project",
-            project_root: row.root_path,
-            inputs: parsed,
+            project_root: pr?.root_path ?? null,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-
-        return payload;
-      });
+        },
+      );
     },
   );
 }

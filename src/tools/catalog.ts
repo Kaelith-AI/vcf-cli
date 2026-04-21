@@ -45,52 +45,52 @@ export function registerConfigGet(server: McpServer, deps: ServerDeps): void {
       inputSchema: ConfigGetInput.shape,
     },
     async (args: z.infer<typeof ConfigGetInput>) => {
-      return runTool(async () => {
-        const parsed = ConfigGetInput.parse(args);
-        const redacted = {
-          workspace: deps.config.workspace,
-          endpoints: deps.config.endpoints.map((e) => ({
-            name: e.name,
-            provider: e.provider,
-            base_url: e.base_url,
-            // expose var *name*, never value
-            ...(e.auth_env_var !== undefined ? { auth_env_var: e.auth_env_var } : {}),
-            trust_level: e.trust_level,
-          })),
-          model_aliases: deps.config.model_aliases,
-          kb: deps.config.kb,
-          review: deps.config.review,
-          redaction: deps.config.redaction,
-          telemetry: {
-            error_reporting_enabled: deps.config.telemetry.error_reporting_enabled,
-            // DSN may itself be a ${ENV_VAR} — redact to var name only.
-            ...(deps.config.telemetry.dsn !== undefined
-              ? { dsn_configured: true }
-              : { dsn_configured: false }),
-          },
-        };
-        const out =
-          parsed.section === "all" ? redacted : { [parsed.section]: redacted[parsed.section] };
-        const payload = success(
-          [],
-          `config_get(${parsed.section}): ${Object.keys(out).length} section(s).`,
-          parsed.expand
-            ? { content: out }
-            : { expand_hint: "Call config_get with expand=true for the section data." },
-        );
-        try {
+      return runTool(
+        async () => {
+          const parsed = ConfigGetInput.parse(args);
+          const redacted = {
+            workspace: deps.config.workspace,
+            endpoints: deps.config.endpoints.map((e) => ({
+              name: e.name,
+              provider: e.provider,
+              base_url: e.base_url,
+              // expose var *name*, never value
+              ...(e.auth_env_var !== undefined ? { auth_env_var: e.auth_env_var } : {}),
+              trust_level: e.trust_level,
+            })),
+            model_aliases: deps.config.model_aliases,
+            kb: deps.config.kb,
+            review: deps.config.review,
+            redaction: deps.config.redaction,
+            telemetry: {
+              error_reporting_enabled: deps.config.telemetry.error_reporting_enabled,
+              // DSN may itself be a ${ENV_VAR} — redact to var name only.
+              ...(deps.config.telemetry.dsn !== undefined
+                ? { dsn_configured: true }
+                : { dsn_configured: false }),
+            },
+          };
+          const out =
+            parsed.section === "all" ? redacted : { [parsed.section]: redacted[parsed.section] };
+          const payload = success(
+            [],
+            `config_get(${parsed.section}): ${Object.keys(out).length} section(s).`,
+            parsed.expand
+              ? { content: out }
+              : { expand_hint: "Call config_get with expand=true for the section data." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "config_get",
             scope: deps.scope === "project" ? "project" : "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }
@@ -114,39 +114,39 @@ export function registerEndpointList(server: McpServer, deps: ServerDeps): void 
       inputSchema: EndpointListInput.shape,
     },
     async (args: z.infer<typeof EndpointListInput>) => {
-      return runTool(async () => {
-        const parsed = EndpointListInput.parse(args);
-        const endpoints = deps.config.endpoints
-          .filter((e) => parsed.trust_level === undefined || e.trust_level === parsed.trust_level)
-          .map((e) => ({
-            name: e.name,
-            provider: e.provider,
-            base_url: e.base_url,
-            ...(e.auth_env_var !== undefined ? { auth_env_var: e.auth_env_var } : {}),
-            trust_level: e.trust_level,
-          }));
-        const payload = success(
-          [],
-          `endpoint_list: ${endpoints.length} endpoint(s)${
-            parsed.trust_level ? ` filtered by trust_level=${parsed.trust_level}` : ""
-          }.`,
-          parsed.expand
-            ? { content: { endpoints } }
-            : { expand_hint: "Call endpoint_list with expand=true for the full array." },
-        );
-        try {
+      return runTool(
+        async () => {
+          const parsed = EndpointListInput.parse(args);
+          const endpoints = deps.config.endpoints
+            .filter((e) => parsed.trust_level === undefined || e.trust_level === parsed.trust_level)
+            .map((e) => ({
+              name: e.name,
+              provider: e.provider,
+              base_url: e.base_url,
+              ...(e.auth_env_var !== undefined ? { auth_env_var: e.auth_env_var } : {}),
+              trust_level: e.trust_level,
+            }));
+          const payload = success(
+            [],
+            `endpoint_list: ${endpoints.length} endpoint(s)${
+              parsed.trust_level ? ` filtered by trust_level=${parsed.trust_level}` : ""
+            }.`,
+            parsed.expand
+              ? { content: { endpoints } }
+              : { expand_hint: "Call endpoint_list with expand=true for the full array." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "endpoint_list",
             scope: deps.scope === "project" ? "project" : "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }
@@ -173,33 +173,33 @@ export function registerModelList(server: McpServer, deps: ServerDeps): void {
       inputSchema: ModelListInput.shape,
     },
     async (args: z.infer<typeof ModelListInput>) => {
-      return runTool(async () => {
-        const parsed = ModelListInput.parse(args);
-        const aliases = deps.config.model_aliases.filter(
-          (a) => parsed.prefer_for === undefined || a.prefer_for.includes(parsed.prefer_for),
-        );
-        const payload = success(
-          [],
-          `model_list: ${aliases.length} alias(es)${
-            parsed.prefer_for ? ` for prefer_for=${parsed.prefer_for}` : ""
-          }.`,
-          parsed.expand
-            ? { content: { model_aliases: aliases } }
-            : { expand_hint: "Call model_list with expand=true for the full array." },
-        );
-        try {
+      return runTool(
+        async () => {
+          const parsed = ModelListInput.parse(args);
+          const aliases = deps.config.model_aliases.filter(
+            (a) => parsed.prefer_for === undefined || a.prefer_for.includes(parsed.prefer_for),
+          );
+          const payload = success(
+            [],
+            `model_list: ${aliases.length} alias(es)${
+              parsed.prefer_for ? ` for prefer_for=${parsed.prefer_for}` : ""
+            }.`,
+            parsed.expand
+              ? { content: { model_aliases: aliases } }
+              : { expand_hint: "Call model_list with expand=true for the full array." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "model_list",
             scope: deps.scope === "project" ? "project" : "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }
@@ -231,47 +231,47 @@ export function registerPrimerList(server: McpServer, deps: ServerDeps): void {
       inputSchema: PrimerListInput.shape,
     },
     async (args: z.infer<typeof PrimerListInput>) => {
-      return runTool(async () => {
-        const parsed = PrimerListInput.parse(args);
-        const all = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
-        const filtered = all.filter((e) => {
-          if (parsed.kind !== "all" && e.kind !== parsed.kind) return false;
-          for (const t of parsed.tags) {
-            if (!e.tags.includes(t) && !e.applies_to.includes(t)) return false;
-          }
-          return true;
-        });
-        const rows = filtered.slice(0, parsed.limit).map((e) => ({
-          id: e.id,
-          kind: e.kind,
-          name: e.name,
-          path: e.path,
-          tags: e.tags,
-          ...(e.category !== undefined ? { category: e.category } : {}),
-          ...(e.version !== undefined ? { version: e.version } : {}),
-          ...(e.updated !== undefined ? { updated: e.updated } : {}),
-          ...(e.pack !== undefined ? { pack: e.pack } : {}),
-        }));
-        const payload = success(
-          rows.map((r) => r.path),
-          `primer_list: ${rows.length} / ${all.length} KB entr(y|ies).`,
-          parsed.expand
-            ? { content: { entries: rows } }
-            : { expand_hint: "Call primer_list with expand=true for the full array." },
-        );
-        try {
+      return runTool(
+        async () => {
+          const parsed = PrimerListInput.parse(args);
+          const all = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
+          const filtered = all.filter((e) => {
+            if (parsed.kind !== "all" && e.kind !== parsed.kind) return false;
+            for (const t of parsed.tags) {
+              if (!e.tags.includes(t) && !e.applies_to.includes(t)) return false;
+            }
+            return true;
+          });
+          const rows = filtered.slice(0, parsed.limit).map((e) => ({
+            id: e.id,
+            kind: e.kind,
+            name: e.name,
+            path: e.path,
+            tags: e.tags,
+            ...(e.category !== undefined ? { category: e.category } : {}),
+            ...(e.version !== undefined ? { version: e.version } : {}),
+            ...(e.updated !== undefined ? { updated: e.updated } : {}),
+            ...(e.pack !== undefined ? { pack: e.pack } : {}),
+          }));
+          const payload = success(
+            rows.map((r) => r.path),
+            `primer_list: ${rows.length} / ${all.length} KB entr(y|ies).`,
+            parsed.expand
+              ? { content: { entries: rows } }
+              : { expand_hint: "Call primer_list with expand=true for the full array." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "primer_list",
             scope: deps.scope === "project" ? "project" : "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }
@@ -294,36 +294,36 @@ export function registerPackList(server: McpServer, deps: ServerDeps): void {
       inputSchema: PackListInput.shape,
     },
     async (args: z.infer<typeof PackListInput>) => {
-      return runTool(async () => {
-        const parsed = PackListInput.parse(args);
-        const all = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
-        const byPack = new Map<string, number>();
-        for (const e of all) if (e.pack) byPack.set(e.pack, (byPack.get(e.pack) ?? 0) + 1);
-        const rows = deps.config.kb.packs.map((p) => ({
-          name: p.name,
-          root: p.root,
-          entry_count: byPack.get(p.name) ?? 0,
-        }));
-        const payload = success(
-          rows.map((r) => r.root),
-          `pack_list: ${rows.length} pack(s) registered, ${rows.reduce((n, r) => n + r.entry_count, 0)} entr(y|ies) total.`,
-          parsed.expand
-            ? { content: { packs: rows } }
-            : { expand_hint: "Call pack_list with expand=true for the full array." },
-        );
-        try {
+      return runTool(
+        async () => {
+          const parsed = PackListInput.parse(args);
+          const all = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
+          const byPack = new Map<string, number>();
+          for (const e of all) if (e.pack) byPack.set(e.pack, (byPack.get(e.pack) ?? 0) + 1);
+          const rows = deps.config.kb.packs.map((p) => ({
+            name: p.name,
+            root: p.root,
+            entry_count: byPack.get(p.name) ?? 0,
+          }));
+          const payload = success(
+            rows.map((r) => r.root),
+            `pack_list: ${rows.length} pack(s) registered, ${rows.reduce((n, r) => n + r.entry_count, 0)} entr(y|ies) total.`,
+            parsed.expand
+              ? { content: { packs: rows } }
+              : { expand_hint: "Call pack_list with expand=true for the full array." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "pack_list",
             scope: deps.scope === "project" ? "project" : "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

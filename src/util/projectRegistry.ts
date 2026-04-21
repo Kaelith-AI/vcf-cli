@@ -15,6 +15,8 @@
 //     global-DB row.
 
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
+import { z } from "zod";
+import { queryAll, queryRow } from "./db.js";
 
 export interface ProjectRow {
   name: string;
@@ -25,14 +27,15 @@ export interface ProjectRow {
   last_seen_at: number;
 }
 
-interface DbRow {
-  name: string;
-  root_path: string;
-  state_cache: string | null;
-  depends_on_json: string;
-  registered_at: number;
-  last_seen_at: number;
-}
+const DbRowSchema = z.object({
+  name: z.string(),
+  root_path: z.string(),
+  state_cache: z.string().nullable(),
+  depends_on_json: z.string(),
+  registered_at: z.number(),
+  last_seen_at: z.number(),
+});
+type DbRow = z.infer<typeof DbRowSchema>;
 
 function rowOf(r: DbRow): ProjectRow {
   let deps: string[] = [];
@@ -62,20 +65,17 @@ export function upsertProject(
   args: { name: string; root_path: string; state?: string | null },
 ): string {
   const now = Date.now();
-  // Manual upsert so we can preserve registered_at on conflict.
-  const existing = db
-    .prepare("SELECT name FROM projects WHERE root_path = ?")
-    .get(args.root_path) as { name: string } | undefined;
-  if (existing) {
-    db.prepare(
-      `UPDATE projects SET name = ?, state_cache = COALESCE(?, state_cache), last_seen_at = ?
-       WHERE root_path = ?`,
-    ).run(args.name, args.state ?? null, now, args.root_path);
-    return args.name;
-  }
+  // Single atomic statement — SELECT-then-INSERT is a TOCTOU race under
+  // concurrent registration of the same root. SET clause leaves
+  // registered_at + depends_on_json untouched on conflict, matching the
+  // prior two-step intent.
   db.prepare(
     `INSERT INTO projects (name, root_path, state_cache, depends_on_json, registered_at, last_seen_at)
-     VALUES (?, ?, ?, '[]', ?, ?)`,
+     VALUES (?, ?, ?, '[]', ?, ?)
+     ON CONFLICT(root_path) DO UPDATE SET
+       name = excluded.name,
+       state_cache = COALESCE(excluded.state_cache, state_cache),
+       last_seen_at = excluded.last_seen_at`,
   ).run(args.name, args.root_path, args.state ?? null, now, now);
   return args.name;
 }
@@ -88,31 +88,32 @@ export function unregisterProject(db: DatabaseType, name: string): boolean {
 
 /** List all registered projects, newest-registered first. */
 export function listProjects(db: DatabaseType): ProjectRow[] {
-  const rows = db
-    .prepare(
-      "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects ORDER BY registered_at DESC",
-    )
-    .all() as unknown as DbRow[];
-  return rows.map(rowOf);
+  return queryAll(
+    db,
+    "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects ORDER BY registered_at DESC",
+    DbRowSchema,
+  ).map(rowOf);
 }
 
 /** Get one project by name. */
 export function getProjectByName(db: DatabaseType, name: string): ProjectRow | null {
-  const row = db
-    .prepare(
-      "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects WHERE name = ?",
-    )
-    .get(name) as DbRow | undefined;
+  const row = queryRow(
+    db,
+    "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects WHERE name = ?",
+    DbRowSchema,
+    [name],
+  );
   return row ? rowOf(row) : null;
 }
 
 /** Get one project by root_path. Returns null if not registered. */
 export function getProjectByRoot(db: DatabaseType, root_path: string): ProjectRow | null {
-  const row = db
-    .prepare(
-      "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects WHERE root_path = ?",
-    )
-    .get(root_path) as DbRow | undefined;
+  const row = queryRow(
+    db,
+    "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects WHERE root_path = ?",
+    DbRowSchema,
+    [root_path],
+  );
   return row ? rowOf(row) : null;
 }
 

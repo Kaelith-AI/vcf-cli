@@ -11,7 +11,10 @@ import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { writeAudit } from "../util/audit.js";
+import { queryRow } from "../util/db.js";
 import { McpError } from "../errors.js";
+
+const IdeaPathRowSchema = z.object({ path: z.string() });
 
 const IdeaGetInput = z
   .object({
@@ -34,52 +37,57 @@ export function registerIdeaGet(server: McpServer, deps: ServerDeps): void {
       inputSchema: IdeaGetInput.shape,
     },
     async (args: z.infer<typeof IdeaGetInput>) => {
-      return runTool(async () => {
-        const parsed = IdeaGetInput.parse(args);
-        let path: string;
-        if (parsed.path !== undefined) {
-          path = parsed.path;
-        } else {
-          // Zod refine guarantees slug is defined when path is absent.
-          const slug = parsed.slug!;
-          const row = deps.globalDb
-            .prepare("SELECT path FROM ideas WHERE slug = ? ORDER BY created_at DESC LIMIT 1")
-            .get(slug) as unknown as { path: string } | undefined;
-          if (!row) throw new McpError("E_NOT_FOUND", `no idea with slug "${parsed.slug}"`);
-          path = row.path;
-        }
-
-        const canonical = await assertInsideAllowedRoot(path, deps.config.workspace.allowed_roots);
-        let body: string;
-        try {
-          body = await readFile(canonical, "utf8");
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-            throw new McpError("E_NOT_FOUND", `idea file missing: ${canonical}`);
+      return runTool(
+        async () => {
+          const parsed = IdeaGetInput.parse(args);
+          let path: string;
+          if (parsed.path !== undefined) {
+            path = parsed.path;
+          } else {
+            // Zod refine guarantees slug is defined when path is absent.
+            const slug = parsed.slug!;
+            const row = queryRow(
+              deps.globalDb,
+              "SELECT path FROM ideas WHERE slug = ? ORDER BY created_at DESC LIMIT 1",
+              IdeaPathRowSchema,
+              [slug],
+            );
+            if (!row) throw new McpError("E_NOT_FOUND", `no idea with slug "${parsed.slug}"`);
+            path = row.path;
           }
-          throw err;
-        }
 
-        const payload = success(
-          [canonical],
-          `Fetched idea at ${canonical} (${body.length} bytes).`,
-          parsed.expand
-            ? { content: body }
-            : { expand_hint: "Call idea_get with expand=true to include the file body." },
-        );
-        try {
+          const canonical = await assertInsideAllowedRoot(
+            path,
+            deps.config.workspace.allowed_roots,
+          );
+          let body: string;
+          try {
+            body = await readFile(canonical, "utf8");
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+              throw new McpError("E_NOT_FOUND", `idea file missing: ${canonical}`);
+            }
+            throw err;
+          }
+
+          return success(
+            [canonical],
+            `Fetched idea at ${canonical} (${body.length} bytes).`,
+            parsed.expand
+              ? { content: body }
+              : { expand_hint: "Call idea_get with expand=true to include the file body." },
+          );
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "idea_get",
             scope: "global",
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

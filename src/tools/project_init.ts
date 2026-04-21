@@ -84,209 +84,214 @@ export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
       inputSchema: ProjectInitInput.shape,
     },
     async (args: ProjectInitArgs) => {
-      return runTool(async () => {
-        const parsed = ProjectInitInput.parse(args);
-        const target = resolvePath(parsed.target_dir);
-        await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
+      return runTool(
+        async () => {
+          const parsed = ProjectInitInput.parse(args);
+          const target = resolvePath(parsed.target_dir);
+          await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
 
-        // Pre-existence check. An empty existing directory is fine (treat as
-        // fresh init — common when the user pre-created the folder). A
-        // non-empty directory requires force=true; even then we never
-        // overwrite existing files (see per-file `existsSync` checks below).
-        const targetExists = existsSync(target);
-        if (targetExists) {
-          const st = await stat(target);
-          if (!st.isDirectory()) {
-            throw new McpError("E_STATE_INVALID", `${target} exists and is not a directory`);
+          // Pre-existence check. An empty existing directory is fine (treat as
+          // fresh init — common when the user pre-created the folder). A
+          // non-empty directory requires force=true; even then we never
+          // overwrite existing files (see per-file `existsSync` checks below).
+          const targetExists = existsSync(target);
+          if (targetExists) {
+            const st = await stat(target);
+            if (!st.isDirectory()) {
+              throw new McpError("E_STATE_INVALID", `${target} exists and is not a directory`);
+            }
+            const entries = await readdir(target);
+            if (entries.length > 0 && !parsed.force) {
+              throw new McpError(
+                "E_ALREADY_EXISTS",
+                `${target} is non-empty — pass force=true to initialize in place (existing files are never overwritten)`,
+              );
+            }
           }
-          const entries = await readdir(target);
-          if (entries.length > 0 && !parsed.force) {
-            throw new McpError(
-              "E_ALREADY_EXISTS",
-              `${target} is non-empty — pass force=true to initialize in place (existing files are never overwritten)`,
+
+          await mkdir(target, { recursive: true });
+          const written: string[] = [];
+          const skipped: string[] = [];
+
+          for (const sub of SUBDIRS) await mkdir(join(target, sub), { recursive: true });
+
+          const projectSlug = slugify(parsed.name);
+          const createdDate = isoDate();
+          const tplVars: Record<string, string> = {
+            PROJECT_NAME: parsed.name,
+            PROJECT_SLUG: projectSlug,
+            CREATED_DATE: createdDate,
+            DATE: createdDate,
+          };
+
+          // Docs at project root.
+          const docFiles: Array<[string, string]> = [
+            ["AGENTS.md.tpl", "AGENTS.md"],
+            ["CLAUDE.md.tpl", "CLAUDE.md"],
+            ["TOOLS.md.tpl", "TOOLS.md"],
+            ["MEMORY.md.tpl", "MEMORY.md"],
+            ["README.md.tpl", "README.md"],
+            ["CHANGELOG.md.tpl", "CHANGELOG.md"],
+          ];
+          for (const [tpl, out] of docFiles) {
+            const outPath = join(target, out);
+            if (existsSync(outPath)) {
+              skipped.push(outPath);
+              continue;
+            }
+            const rendered = renderTemplate(await readTemplate(tpl), tplVars);
+            await writeFile(outPath, rendered, "utf8");
+            written.push(outPath);
+          }
+
+          // .gitignore (skip if present).
+          const gitignorePath = join(target, ".gitignore");
+          if (!existsSync(gitignorePath)) {
+            await writeFile(gitignorePath, await readTemplate("gitignore.tpl"), "utf8");
+            written.push(gitignorePath);
+          } else {
+            skipped.push(gitignorePath);
+          }
+
+          // Today's daily log.
+          const dailyLogPath = join(target, "memory", "daily-logs", `${createdDate}.md`);
+          if (!existsSync(dailyLogPath)) {
+            await writeFile(
+              dailyLogPath,
+              renderTemplate(await readTemplate("daily-log-template.md.tpl"), tplVars),
+              "utf8",
             );
-          }
-        }
-
-        await mkdir(target, { recursive: true });
-        const written: string[] = [];
-        const skipped: string[] = [];
-
-        for (const sub of SUBDIRS) await mkdir(join(target, sub), { recursive: true });
-
-        const projectSlug = slugify(parsed.name);
-        const createdDate = isoDate();
-        const tplVars: Record<string, string> = {
-          PROJECT_NAME: parsed.name,
-          PROJECT_SLUG: projectSlug,
-          CREATED_DATE: createdDate,
-          DATE: createdDate,
-        };
-
-        // Docs at project root.
-        const docFiles: Array<[string, string]> = [
-          ["AGENTS.md.tpl", "AGENTS.md"],
-          ["CLAUDE.md.tpl", "CLAUDE.md"],
-          ["TOOLS.md.tpl", "TOOLS.md"],
-          ["MEMORY.md.tpl", "MEMORY.md"],
-          ["README.md.tpl", "README.md"],
-          ["CHANGELOG.md.tpl", "CHANGELOG.md"],
-        ];
-        for (const [tpl, out] of docFiles) {
-          const outPath = join(target, out);
-          if (existsSync(outPath)) {
-            skipped.push(outPath);
-            continue;
-          }
-          const rendered = renderTemplate(await readTemplate(tpl), tplVars);
-          await writeFile(outPath, rendered, "utf8");
-          written.push(outPath);
-        }
-
-        // .gitignore (skip if present).
-        const gitignorePath = join(target, ".gitignore");
-        if (!existsSync(gitignorePath)) {
-          await writeFile(gitignorePath, await readTemplate("gitignore.tpl"), "utf8");
-          written.push(gitignorePath);
-        } else {
-          skipped.push(gitignorePath);
-        }
-
-        // Today's daily log.
-        const dailyLogPath = join(target, "memory", "daily-logs", `${createdDate}.md`);
-        if (!existsSync(dailyLogPath)) {
-          await writeFile(
-            dailyLogPath,
-            renderTemplate(await readTemplate("daily-log-template.md.tpl"), tplVars),
-            "utf8",
-          );
-          written.push(dailyLogPath);
-        } else {
-          skipped.push(dailyLogPath);
-        }
-
-        // Optional spec copy.
-        if (parsed.spec_path) {
-          const specSrc = resolvePath(parsed.spec_path);
-          await assertInsideAllowedRoot(specSrc, deps.config.workspace.allowed_roots);
-          const specDst = join(target, "plans", `${projectSlug}-spec.md`);
-          if (!existsSync(specDst)) {
-            const content = await readFile(specSrc, "utf8");
-            await writeFile(specDst, content, "utf8");
-            written.push(specDst);
+            written.push(dailyLogPath);
           } else {
-            skipped.push(specDst);
+            skipped.push(dailyLogPath);
           }
-        }
 
-        // .mcp.json — merge with existing, never replace.
-        const mcpJsonPath = join(target, ".mcp.json");
-        const mcpBlock = {
-          command: "npx",
-          args: ["-y", "@kaelith-labs/cli", "vcf-mcp", "--scope", "project"],
-          env: { VCF_CONFIG: "${HOME}/.vcf/config.yaml" },
-        };
-        let mcpMerged = false;
-        if (existsSync(mcpJsonPath)) {
-          const raw = await readFile(mcpJsonPath, "utf8");
-          let parsedJson: { mcpServers?: Record<string, unknown> } = {};
-          try {
-            parsedJson = JSON.parse(raw) as typeof parsedJson;
-          } catch {
-            throw new McpError("E_STATE_INVALID", `${mcpJsonPath} is not valid JSON`);
+          // Optional spec copy.
+          if (parsed.spec_path) {
+            const specSrc = resolvePath(parsed.spec_path);
+            await assertInsideAllowedRoot(specSrc, deps.config.workspace.allowed_roots);
+            const specDst = join(target, "plans", `${projectSlug}-spec.md`);
+            if (!existsSync(specDst)) {
+              const content = await readFile(specSrc, "utf8");
+              await writeFile(specDst, content, "utf8");
+              written.push(specDst);
+            } else {
+              skipped.push(specDst);
+            }
           }
-          if (!parsedJson.mcpServers) parsedJson.mcpServers = {};
-          if (!parsedJson.mcpServers["vcf"]) {
-            parsedJson.mcpServers["vcf"] = mcpBlock;
-            await writeFile(mcpJsonPath, JSON.stringify(parsedJson, null, 2) + "\n", "utf8");
-            mcpMerged = true;
+
+          // .mcp.json — merge with existing, never replace.
+          const mcpJsonPath = join(target, ".mcp.json");
+          const mcpBlock = {
+            command: "npx",
+            args: ["-y", "@kaelith-labs/cli", "vcf-mcp", "--scope", "project"],
+            env: { VCF_CONFIG: "${HOME}/.vcf/config.yaml" },
+          };
+          let mcpMerged = false;
+          if (existsSync(mcpJsonPath)) {
+            const raw = await readFile(mcpJsonPath, "utf8");
+            let parsedJson: { mcpServers?: Record<string, unknown> } = {};
+            try {
+              parsedJson = JSON.parse(raw) as typeof parsedJson;
+            } catch {
+              throw new McpError("E_STATE_INVALID", `${mcpJsonPath} is not valid JSON`);
+            }
+            if (!parsedJson.mcpServers) parsedJson.mcpServers = {};
+            if (!parsedJson.mcpServers["vcf"]) {
+              parsedJson.mcpServers["vcf"] = mcpBlock;
+              await writeFile(mcpJsonPath, JSON.stringify(parsedJson, null, 2) + "\n", "utf8");
+              mcpMerged = true;
+              written.push(mcpJsonPath);
+            } else {
+              skipped.push(mcpJsonPath);
+            }
+          } else {
+            await writeFile(
+              mcpJsonPath,
+              JSON.stringify({ mcpServers: { vcf: mcpBlock } }, null, 2) + "\n",
+              "utf8",
+            );
             written.push(mcpJsonPath);
-          } else {
-            skipped.push(mcpJsonPath);
           }
-        } else {
-          await writeFile(
-            mcpJsonPath,
-            JSON.stringify({ mcpServers: { vcf: mcpBlock } }, null, 2) + "\n",
-            "utf8",
-          );
-          written.push(mcpJsonPath);
-        }
 
-        // Project DB.
-        const dbPath = join(target, ".vcf", "project.db");
-        const newDb = !existsSync(dbPath);
-        const db = openProjectDb({ path: dbPath });
-        const now = Date.now();
-        db.prepare(
-          `INSERT OR IGNORE INTO project (id, name, root_path, state, created_at, updated_at, spec_path)
-           VALUES (1, ?, ?, 'draft', ?, ?, ?)`,
-        ).run(parsed.name, target, now, now, parsed.spec_path ?? null);
-        db.close();
-        if (newDb) written.push(dbPath);
-        else skipped.push(dbPath);
+          // Project DB.
+          const dbPath = join(target, ".vcf", "project.db");
+          const newDb = !existsSync(dbPath);
+          const db = openProjectDb({ path: dbPath });
+          const now = Date.now();
+          db.prepare(
+            `INSERT OR IGNORE INTO project (id, name, root_path, state, created_at, updated_at, spec_path)
+             VALUES (1, ?, ?, 'draft', ?, ?, ?)`,
+          ).run(parsed.name, target, now, now, parsed.spec_path ?? null);
+          db.close();
+          if (newDb) written.push(dbPath);
+          else skipped.push(dbPath);
 
-        // Global registry: auto-register the new project unless opted out.
-        // Silent if it's already registered (upsert). Uses the same slug
-        // the project directory already derived from parsed.name.
-        if (parsed.register) {
-          try {
-            upsertProject(deps.globalDb, {
-              name: projectSlug,
-              root_path: target,
-              state: "draft",
-            });
-          } catch {
-            /* non-fatal — registry is a convenience, not a requirement */
+          // Global registry: auto-register the new project unless opted out.
+          // Silent if it's already registered (upsert). Uses the same slug
+          // the project directory already derived from parsed.name.
+          if (parsed.register) {
+            try {
+              upsertProject(deps.globalDb, {
+                name: projectSlug,
+                root_path: target,
+                state: "draft",
+              });
+            } catch {
+              /* non-fatal — registry is a convenience, not a requirement */
+            }
           }
-        }
 
-        // Git init + hooks. Only init if .git doesn't already exist so we
-        // don't disturb an existing repo.
-        const gitDir = join(target, ".git");
-        if (!existsSync(gitDir)) {
-          const git = simpleGit({ baseDir: target });
-          await git.init();
-        }
-        await installHooks(target, written, skipped);
+          // Git init + hooks. Only init if .git doesn't already exist so we
+          // don't disturb an existing repo.
+          const gitDir = join(target, ".git");
+          if (!existsSync(gitDir)) {
+            const git = simpleGit({ baseDir: target });
+            await git.init();
+          }
+          await installHooks(target, written, skipped);
 
-        const createdCount = written.length;
-        const summary =
-          `Initialized project "${parsed.name}" at ${target} — ` +
-          `${createdCount} file(s) written, ${skipped.length} skipped (existing)` +
-          (mcpMerged ? " — .mcp.json merged with existing block." : "");
+          const createdCount = written.length;
+          const summary =
+            `Initialized project "${parsed.name}" at ${target} — ` +
+            `${createdCount} file(s) written, ${skipped.length} skipped (existing)` +
+            (mcpMerged ? " — .mcp.json merged with existing block." : "");
 
-        const payload = success([target, ...written.slice(0, 10)], summary, {
-          ...(parsed.expand
-            ? {
-                content: {
-                  written,
-                  skipped,
-                  project_db: dbPath,
-                  mcp_json: mcpJsonPath,
-                  vcf_version: VERSION,
-                },
-              }
-            : {
-                expand_hint: "Call project_init again with expand=true to see the full file list.",
-              }),
-        });
+          const payload = success([target, ...written.slice(0, 10)], summary, {
+            ...(parsed.expand
+              ? {
+                  content: {
+                    written,
+                    skipped,
+                    project_db: dbPath,
+                    mcp_json: mcpJsonPath,
+                    vcf_version: VERSION,
+                  },
+                }
+              : {
+                  expand_hint:
+                    "Call project_init again with expand=true to see the full file list.",
+                }),
+          });
 
-        try {
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "project_init",
             scope: "global",
-            project_root: target,
-            inputs: parsed,
+            // target_dir is guaranteed by Zod schema; still tolerant of
+            // malformed args (audit fires on validation-failure too).
+            project_root:
+              typeof (args as { target_dir?: unknown }).target_dir === "string"
+                ? (args as { target_dir: string }).target_dir
+                : null,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-
-        return payload;
-      });
+        },
+      );
     },
   );
 }

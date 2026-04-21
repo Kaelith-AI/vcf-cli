@@ -81,190 +81,189 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
       inputSchema: ShipReleaseInput.shape,
     },
     async (args: Args) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "ship_release requires project scope");
-        }
-        const parsed = ShipReleaseInput.parse(args);
-        const projectRoot = readProjectRoot(deps);
-        if (!projectRoot) throw new McpError("E_STATE_INVALID", "project row missing");
+      // Captured during body execution; read by onComplete so per-path audit
+      // shape (plan vs confirm+execute) is preserved without two audit calls.
+      let auditBundle: { content?: unknown; result_code?: string } = {};
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "ship_release requires project scope");
+          }
+          const parsed = ShipReleaseInput.parse(args);
+          const projectRoot = readProjectRoot(deps);
+          if (!projectRoot) throw new McpError("E_STATE_INVALID", "project row missing");
 
-        // The plan payload the confirm_token binds to. We strip confirm_token
-        // + expand so the user can toggle verbosity / pass the token back
-        // without invalidating the plan.
-        const planPayload = {
-          tag: parsed.tag,
-          title: parsed.title ?? null,
-          notes: parsed.notes ?? null,
-          draft: parsed.draft,
-          prerelease: parsed.prerelease,
-          target: parsed.target ?? null,
-          generate_notes: parsed.generate_notes,
-          project_root: projectRoot,
-        };
-        const cmd = buildGhArgs(parsed, projectRoot);
+          // The plan payload the confirm_token binds to. We strip confirm_token
+          // + expand so the user can toggle verbosity / pass the token back
+          // without invalidating the plan.
+          const planPayload = {
+            tag: parsed.tag,
+            title: parsed.title ?? null,
+            notes: parsed.notes ?? null,
+            draft: parsed.draft,
+            prerelease: parsed.prerelease,
+            target: parsed.target ?? null,
+            generate_notes: parsed.generate_notes,
+            project_root: readProjectRoot(deps),
+          };
+          const cmd = buildGhArgs(parsed, projectRoot);
 
-        // Plan-only call.
-        if (parsed.confirm_token === undefined) {
-          const token = getStore().issue(planPayload);
+          // Plan-only call.
+          if (parsed.confirm_token === undefined) {
+            const token = getStore().issue(planPayload);
+            auditBundle = {
+              content: { ...planPayload, confirm_token: "<redacted>" },
+              result_code: "ok",
+            };
+            const payload = success<unknown>(
+              [projectRoot],
+              `ship_release plan: \`gh release create ${cmd.args.join(" ")}\` in ${projectRoot}. Single-use confirm_token issued (TTL 60s).`,
+              parsed.expand
+                ? {
+                    content: {
+                      plan: planPayload,
+                      command: { name: "gh", args: cmd.args, cwd: projectRoot },
+                      confirm_token: token,
+                      notes_source: parsed.generate_notes
+                        ? "gh --generate-notes"
+                        : parsed.notes
+                          ? "caller-provided"
+                          : "(empty)",
+                    },
+                  }
+                : {
+                    expand_hint:
+                      "Call ship_release with expand=true to receive the exact command + confirm_token.",
+                  },
+            );
+            return payload;
+          }
+
+          // Confirm call — validate the token or refuse.
+          try {
+            getStore().consume(parsed.confirm_token, planPayload);
+          } catch (err) {
+            throw err instanceof McpError
+              ? err
+              : new McpError("E_CONFIRM_REQUIRED", (err as Error).message);
+          }
+
+          // Execute. Timeout is enforced in-process: if gh doesn't close
+          // within parsed.timeout_ms we SIGTERM it and resolve with
+          // exit_code: null + timed_out: true. Prevents a hung gh (e.g.
+          // auth prompt on CI, network stall) from leaking the handler.
+          const result = await new Promise<{
+            exit_code: number | null;
+            stdout_tail: string;
+            stderr_tail: string;
+            duration_ms: number;
+            timed_out: boolean;
+          }>((resolve) => {
+            const startedAt = Date.now();
+            let stdoutBuf = "";
+            let stderrBuf = "";
+            let settled = false;
+            const child = spawn(cmd.command, cmd.args, {
+              cwd: projectRoot,
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            const TAIL = 16 * 1024;
+            const timer = setTimeout(() => {
+              if (settled) return;
+              stderrBuf += `\n[timeout] gh killed after ${parsed.timeout_ms}ms\n`;
+              try {
+                child.kill("SIGTERM");
+              } catch {
+                /* child may have already exited */
+              }
+              settled = true;
+              resolve({
+                exit_code: null,
+                stdout_tail: stdoutBuf,
+                stderr_tail: stderrBuf,
+                duration_ms: Date.now() - startedAt,
+                timed_out: true,
+              });
+            }, parsed.timeout_ms);
+            child.stdout.on("data", (c: Buffer) => {
+              stdoutBuf += c.toString("utf8");
+              if (stdoutBuf.length > TAIL) stdoutBuf = stdoutBuf.slice(stdoutBuf.length - TAIL);
+            });
+            child.stderr.on("data", (c: Buffer) => {
+              stderrBuf += c.toString("utf8");
+              if (stderrBuf.length > TAIL) stderrBuf = stderrBuf.slice(stderrBuf.length - TAIL);
+            });
+            child.on("error", (err) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              stderrBuf += `\n[spawn error] ${(err as Error).message}\n`;
+              resolve({
+                exit_code: null,
+                stdout_tail: stdoutBuf,
+                stderr_tail: stderrBuf,
+                duration_ms: Date.now() - startedAt,
+                timed_out: false,
+              });
+            });
+            child.on("close", (code) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              resolve({
+                exit_code: code,
+                stdout_tail: stdoutBuf,
+                stderr_tail: stderrBuf,
+                duration_ms: Date.now() - startedAt,
+                timed_out: false,
+              });
+            });
+          });
+
+          const passed = result.exit_code === 0;
+          const summary = passed
+            ? `ship_release: ${parsed.tag} created (${result.duration_ms}ms).`
+            : `ship_release: gh exited ${result.exit_code ?? "null"} — release NOT created.`;
+
+          // Record as a build row so portfolio_status picks it up.
+          deps.projectDb
+            .prepare(
+              `INSERT INTO builds (target, started_at, finished_at, status, output_path)
+               VALUES (?, ?, ?, ?, ?)`,
+            )
+            .run(
+              `ship_release:${parsed.tag}`,
+              Date.now() - result.duration_ms,
+              Date.now(),
+              passed ? "success" : "failed",
+              null,
+            );
+
           const payload = success<unknown>(
             [projectRoot],
-            `ship_release plan: \`gh release create ${cmd.args.join(" ")}\` in ${projectRoot}. Single-use confirm_token issued (TTL 60s).`,
-            parsed.expand
-              ? {
-                  content: {
-                    plan: planPayload,
-                    command: { name: "gh", args: cmd.args, cwd: projectRoot },
-                    confirm_token: token,
-                    notes_source: parsed.generate_notes
-                      ? "gh --generate-notes"
-                      : parsed.notes
-                        ? "caller-provided"
-                        : "(empty)",
-                  },
-                }
-              : {
-                  expand_hint:
-                    "Call ship_release with expand=true to receive the exact command + confirm_token.",
-                },
+            summary,
+            parsed.expand ? { content: result } : {},
           );
-          try {
-            writeAudit(deps.globalDb, {
-              tool: "ship_release",
-              scope: "project",
-              project_root: projectRoot,
-              inputs: { ...parsed, confirm_token: null },
-              outputs: { ...payload, content: { ...planPayload, confirm_token: "<redacted>" } },
-              result_code: "ok",
-            });
-          } catch {
-            /* non-fatal */
-          }
+          auditBundle = {
+            content: { ...result, stdout_tail: "<redacted>", stderr_tail: "<redacted>" },
+            result_code: passed ? "ok" : "E_INTERNAL",
+          };
           return payload;
-        }
-
-        // Confirm call — validate the token or refuse.
-        try {
-          getStore().consume(parsed.confirm_token, planPayload);
-        } catch (err) {
-          throw err instanceof McpError
-            ? err
-            : new McpError("E_CONFIRM_REQUIRED", (err as Error).message);
-        }
-
-        // Execute. Timeout is enforced in-process: if gh doesn't close
-        // within parsed.timeout_ms we SIGTERM it and resolve with
-        // exit_code: null + timed_out: true. Prevents a hung gh (e.g.
-        // auth prompt on CI, network stall) from leaking the handler.
-        const result = await new Promise<{
-          exit_code: number | null;
-          stdout_tail: string;
-          stderr_tail: string;
-          duration_ms: number;
-          timed_out: boolean;
-        }>((resolve) => {
-          const startedAt = Date.now();
-          let stdoutBuf = "";
-          let stderrBuf = "";
-          let settled = false;
-          const child = spawn(cmd.command, cmd.args, {
-            cwd: projectRoot,
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-          const TAIL = 16 * 1024;
-          const timer = setTimeout(() => {
-            if (settled) return;
-            stderrBuf += `\n[timeout] gh killed after ${parsed.timeout_ms}ms\n`;
-            try {
-              child.kill("SIGTERM");
-            } catch {
-              /* child may have already exited */
-            }
-            settled = true;
-            resolve({
-              exit_code: null,
-              stdout_tail: stdoutBuf,
-              stderr_tail: stderrBuf,
-              duration_ms: Date.now() - startedAt,
-              timed_out: true,
-            });
-          }, parsed.timeout_ms);
-          child.stdout.on("data", (c: Buffer) => {
-            stdoutBuf += c.toString("utf8");
-            if (stdoutBuf.length > TAIL) stdoutBuf = stdoutBuf.slice(stdoutBuf.length - TAIL);
-          });
-          child.stderr.on("data", (c: Buffer) => {
-            stderrBuf += c.toString("utf8");
-            if (stderrBuf.length > TAIL) stderrBuf = stderrBuf.slice(stderrBuf.length - TAIL);
-          });
-          child.on("error", (err) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            stderrBuf += `\n[spawn error] ${(err as Error).message}\n`;
-            resolve({
-              exit_code: null,
-              stdout_tail: stdoutBuf,
-              stderr_tail: stderrBuf,
-              duration_ms: Date.now() - startedAt,
-              timed_out: false,
-            });
-          });
-          child.on("close", (code) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            resolve({
-              exit_code: code,
-              stdout_tail: stdoutBuf,
-              stderr_tail: stderrBuf,
-              duration_ms: Date.now() - startedAt,
-              timed_out: false,
-            });
-          });
-        });
-
-        const passed = result.exit_code === 0;
-        const summary = passed
-          ? `ship_release: ${parsed.tag} created (${result.duration_ms}ms).`
-          : `ship_release: gh exited ${result.exit_code ?? "null"} — release NOT created.`;
-
-        // Record as a build row so portfolio_status picks it up.
-        deps.projectDb
-          .prepare(
-            `INSERT INTO builds (target, started_at, finished_at, status, output_path)
-             VALUES (?, ?, ?, ?, ?)`,
-          )
-          .run(
-            `ship_release:${parsed.tag}`,
-            Date.now() - result.duration_ms,
-            Date.now(),
-            passed ? "success" : "failed",
-            null,
-          );
-
-        const payload = success<unknown>(
-          [projectRoot],
-          summary,
-          parsed.expand ? { content: result } : {},
-        );
-        try {
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "ship_release",
             scope: "project",
-            project_root: projectRoot,
-            inputs: { ...parsed, confirm_token: "<consumed>" },
-            outputs: {
-              ...payload,
-              content: { ...result, stdout_tail: "<redacted>", stderr_tail: "<redacted>" },
-            },
-            result_code: passed ? "ok" : "E_INTERNAL",
+            project_root: readProjectRoot(deps),
+            inputs: args,
+            outputs:
+              auditBundle.content !== undefined
+                ? { ...payload, content: auditBundle.content }
+                : payload,
+            result_code: auditBundle.result_code ?? (payload.ok ? "ok" : payload.code),
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

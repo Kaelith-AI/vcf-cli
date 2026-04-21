@@ -46,77 +46,77 @@ export function registerDecisionLogAdd(server: McpServer, deps: ServerDeps): voi
       inputSchema: DecisionLogAddInput.shape,
     },
     async (args: z.infer<typeof DecisionLogAddInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "decision_log_add requires project scope");
-        }
-        const parsed = DecisionLogAddInput.parse(args);
-        const root = readProjectRoot(deps);
-        if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
-
-        const date = isoDate();
-        const slug = slugify(parsed.title);
-        const dir = join(root, "plans", "decisions");
-        await assertInsideAllowedRoot(dir, deps.config.workspace.allowed_roots);
-        await mkdir(dir, { recursive: true });
-        const filename = `${date}-${slug}.md`;
-        const target = join(dir, filename);
-
-        if (existsSync(target)) {
-          throw new McpError("E_ALREADY_EXISTS", `decision log entry already exists: ${target}`);
-        }
-
-        // Validate supersedes reference.
-        if (parsed.supersedes) {
-          const hit = deps.projectDb
-            .prepare("SELECT slug FROM decisions WHERE slug = ?")
-            .get(parsed.supersedes);
-          if (!hit) {
-            throw new McpError(
-              "E_NOT_FOUND",
-              `supersedes="${parsed.supersedes}" does not reference an existing decision`,
-            );
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "decision_log_add requires project scope");
           }
-        }
+          const parsed = DecisionLogAddInput.parse(args);
+          const root = readProjectRoot(deps);
+          if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 
-        const md = renderAdr({ ...parsed, slug, created: date });
-        await writeFile(target, md, "utf8");
+          const date = isoDate();
+          const slug = slugify(parsed.title);
+          const dir = join(root, "plans", "decisions");
+          await assertInsideAllowedRoot(dir, deps.config.workspace.allowed_roots);
+          await mkdir(dir, { recursive: true });
+          const filename = `${date}-${slug}.md`;
+          const target = join(dir, filename);
 
-        deps.projectDb
-          .prepare("INSERT INTO decisions (slug, created_at, path) VALUES (?, ?, ?)")
-          .run(slug, Date.now(), target);
+          if (existsSync(target)) {
+            throw new McpError("E_ALREADY_EXISTS", `decision log entry already exists: ${target}`);
+          }
 
-        // Mark the superseded entry (if any) superseded.
-        if (parsed.supersedes) {
-          // We don't mutate the prior file (disposable → never rewrite). We
-          // index the relationship via a comment line appended in memory
-          // in-future enhancements. For now, the new entry's frontmatter
-          // carries `supersedes:` and the reader can follow the link.
-        }
+          // Validate supersedes reference.
+          if (parsed.supersedes) {
+            const hit = deps.projectDb
+              .prepare("SELECT slug FROM decisions WHERE slug = ?")
+              .get(parsed.supersedes);
+            if (!hit) {
+              throw new McpError(
+                "E_NOT_FOUND",
+                `supersedes="${parsed.supersedes}" does not reference an existing decision`,
+              );
+            }
+          }
 
-        const payload = success(
-          [target],
-          `Logged decision "${slug}" (${parsed.status}) at ${target}.`,
-          parsed.expand
-            ? { content: { path: target, slug, status: parsed.status } }
-            : {
-                expand_hint: "Call decision_log_add with expand=true for the decision metadata.",
-              },
-        );
-        try {
+          const md = renderAdr({ ...parsed, slug, created: date });
+          await writeFile(target, md, "utf8");
+
+          deps.projectDb
+            .prepare("INSERT INTO decisions (slug, created_at, path) VALUES (?, ?, ?)")
+            .run(slug, Date.now(), target);
+
+          // Mark the superseded entry (if any) superseded.
+          if (parsed.supersedes) {
+            // We don't mutate the prior file (disposable → never rewrite). We
+            // index the relationship via a comment line appended in memory
+            // in-future enhancements. For now, the new entry's frontmatter
+            // carries `supersedes:` and the reader can follow the link.
+          }
+
+          const payload = success(
+            [target],
+            `Logged decision "${slug}" (${parsed.status}) at ${target}.`,
+            parsed.expand
+              ? { content: { path: target, slug, status: parsed.status } }
+              : {
+                  expand_hint: "Call decision_log_add with expand=true for the decision metadata.",
+                },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "decision_log_add",
             scope: "project",
-            project_root: root,
-            inputs: parsed,
+            project_root: readProjectRoot(deps),
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }
@@ -163,36 +163,38 @@ export function registerDecisionLogList(server: McpServer, deps: ServerDeps): vo
       inputSchema: DecisionLogListInput.shape,
     },
     async (args: z.infer<typeof DecisionLogListInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "decision_log_list requires project scope");
-        }
-        const parsed = DecisionLogListInput.parse(args);
-        const rows = deps.projectDb
-          .prepare("SELECT slug, path, created_at FROM decisions ORDER BY created_at DESC LIMIT ?")
-          .all(parsed.limit) as Array<{ slug: string; path: string; created_at: number }>;
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "decision_log_list requires project scope");
+          }
+          const parsed = DecisionLogListInput.parse(args);
+          const rows = deps.projectDb
+            .prepare(
+              "SELECT slug, path, created_at FROM decisions ORDER BY created_at DESC LIMIT ?",
+            )
+            .all(parsed.limit) as Array<{ slug: string; path: string; created_at: number }>;
 
-        const payload = success(
-          rows.map((r) => r.path),
-          `decision_log_list: ${rows.length} entr(y|ies).`,
-          parsed.expand
-            ? { content: { entries: rows } }
-            : { expand_hint: "Call decision_log_list with expand=true for the full array." },
-        );
-        try {
+          const payload = success(
+            rows.map((r) => r.path),
+            `decision_log_list: ${rows.length} entr(y|ies).`,
+            parsed.expand
+              ? { content: { entries: rows } }
+              : { expand_hint: "Call decision_log_list with expand=true for the full array." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "decision_log_list",
             scope: "project",
             project_root: readProjectRoot(deps),
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

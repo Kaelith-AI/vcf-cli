@@ -56,72 +56,75 @@ export function registerTestAnalyze(server: McpServer, deps: ServerDeps): void {
       inputSchema: TestAnalyzeInput.shape,
     },
     async (args: z.infer<typeof TestAnalyzeInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "test_analyze requires project scope");
-        }
-        const parsed = TestAnalyzeInput.parse(args);
-        const combined = `${parsed.stdout}\n${parsed.stderr}`;
-        const matches: Array<{ runner: string; line: string }> = [];
-        const seen = new Set<string>();
-        let suspected = "unknown";
-        for (const { runner, regex } of PATTERNS) {
-          regex.lastIndex = 0;
-          let m: RegExpExecArray | null;
-          while ((m = regex.exec(combined)) !== null) {
-            const line = (m[1] ?? "").trim();
-            if (line.length === 0 || seen.has(line)) continue;
-            seen.add(line);
-            matches.push({ runner, line });
-            if (suspected === "unknown") suspected = runner;
+      // Redacted inputs captured during body; onComplete reads them so
+      // full stdout/stderr never land in the audit log.
+      let auditInputs: unknown = args;
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "test_analyze requires project scope");
+          }
+          const parsed = TestAnalyzeInput.parse(args);
+          auditInputs = {
+            ...parsed,
+            stdout: `<${parsed.stdout.length}B>`,
+            stderr: `<${parsed.stderr.length}B>`,
+          };
+          const combined = `${parsed.stdout}\n${parsed.stderr}`;
+          const matches: Array<{ runner: string; line: string }> = [];
+          const seen = new Set<string>();
+          let suspected = "unknown";
+          for (const { runner, regex } of PATTERNS) {
+            regex.lastIndex = 0;
+            let m: RegExpExecArray | null;
+            while ((m = regex.exec(combined)) !== null) {
+              const line = (m[1] ?? "").trim();
+              if (line.length === 0 || seen.has(line)) continue;
+              seen.add(line);
+              matches.push({ runner, line });
+              if (suspected === "unknown") suspected = runner;
+              if (matches.length >= parsed.max_failures) break;
+            }
             if (matches.length >= parsed.max_failures) break;
           }
-          if (matches.length >= parsed.max_failures) break;
-        }
 
-        const passed = parsed.exit_code === 0 && matches.length === 0;
-        const note =
-          !passed && matches.length === 0
-            ? "No known failure signature matched; inspect the raw tail from test_execute."
-            : null;
+          const passed = parsed.exit_code === 0 && matches.length === 0;
+          const note =
+            !passed && matches.length === 0
+              ? "No known failure signature matched; inspect the raw tail from test_execute."
+              : null;
 
-        const result: AnalyzeResult = {
-          passed,
-          failure_count: matches.length,
-          reported: matches,
-          suspected_runner: suspected,
-          note,
-        };
+          const result: AnalyzeResult = {
+            passed,
+            failure_count: matches.length,
+            reported: matches,
+            suspected_runner: suspected,
+            note,
+          };
 
-        const payload = success(
-          [],
-          passed
-            ? `Tests passed (exit=${parsed.exit_code}, 0 failure signatures).`
-            : `Tests failed: ${matches.length} reported, exit=${parsed.exit_code ?? "?"}${
-                note ? "; " + note : ""
-              }.`,
-          parsed.expand
-            ? { content: result }
-            : { expand_hint: "Call test_analyze with expand=true for the failure list." },
-        );
-        try {
+          return success(
+            [],
+            passed
+              ? `Tests passed (exit=${parsed.exit_code}, 0 failure signatures).`
+              : `Tests failed: ${matches.length} reported, exit=${parsed.exit_code ?? "?"}${
+                  note ? "; " + note : ""
+                }.`,
+            parsed.expand
+              ? { content: result }
+              : { expand_hint: "Call test_analyze with expand=true for the failure list." },
+          );
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "test_analyze",
             scope: "project",
             project_root: readProjectRoot(deps),
-            inputs: {
-              ...parsed,
-              stdout: `<${parsed.stdout.length}B>`,
-              stderr: `<${parsed.stderr.length}B>`,
-            },
+            inputs: auditInputs,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

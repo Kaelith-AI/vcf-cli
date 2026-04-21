@@ -40,56 +40,56 @@ export function registerBuildSwap(server: McpServer, deps: ServerDeps): void {
       inputSchema: BuildSwapInput.shape,
     },
     async (args: z.infer<typeof BuildSwapInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "build_swap requires project scope");
-        }
-        const parsed = BuildSwapInput.parse(args);
-        const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
-        const bp = entries.find(
-          (e) => e.kind === "best-practice" && e.name.toLowerCase() === parsed.to_type,
-        );
-        const bpBody = bp ? await readFile(bp.path, "utf8") : null;
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "build_swap requires project scope");
+          }
+          const parsed = BuildSwapInput.parse(args);
+          const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
+          const bp = entries.find(
+            (e) => e.kind === "best-practice" && e.name.toLowerCase() === parsed.to_type,
+          );
+          const bpBody = bp ? await readFile(bp.path, "utf8") : null;
 
-        const hint = [
-          `Compact the current session before resuming.`,
-          `New builder type: ${parsed.to_type}. Re-read plans/${parsed.plan_name}-plan.md and`,
-          `plans/${parsed.plan_name}-manifest.md, then proceed with the best-practice doc below.`,
-        ].join(" ");
+          const hint = [
+            `Compact the current session before resuming.`,
+            `New builder type: ${parsed.to_type}. Re-read plans/${parsed.plan_name}-plan.md and`,
+            `plans/${parsed.plan_name}-manifest.md, then proceed with the best-practice doc below.`,
+          ].join(" ");
 
-        const payload = success(
-          bp ? [bp.path] : [],
-          `Swap ${parsed.from_type} → ${parsed.to_type} for plan "${parsed.plan_name}"${
-            bp ? "" : " (no matching best-practice in KB — proceeding with generic guidance)"
-          }.`,
-          parsed.expand
-            ? {
-                content: {
-                  compaction_hint: hint,
-                  from_type: parsed.from_type,
-                  to_type: parsed.to_type,
-                  best_practice_md: bpBody,
+          const payload = success(
+            bp ? [bp.path] : [],
+            `Swap ${parsed.from_type} → ${parsed.to_type} for plan "${parsed.plan_name}"${
+              bp ? "" : " (no matching best-practice in KB — proceeding with generic guidance)"
+            }.`,
+            parsed.expand
+              ? {
+                  content: {
+                    compaction_hint: hint,
+                    from_type: parsed.from_type,
+                    to_type: parsed.to_type,
+                    best_practice_md: bpBody,
+                  },
+                }
+              : {
+                  expand_hint:
+                    "Call build_swap with expand=true to receive the hint + best-practice body.",
                 },
-              }
-            : {
-                expand_hint:
-                  "Call build_swap with expand=true to receive the hint + best-practice body.",
-              },
-        );
-        try {
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "build_swap",
             scope: "project",
             project_root: readProjectRoot(deps),
-            inputs: parsed,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

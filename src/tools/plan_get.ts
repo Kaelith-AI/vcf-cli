@@ -35,57 +35,60 @@ export function registerPlanGet(server: McpServer, deps: ServerDeps): void {
       inputSchema: PlanGetInput.shape,
     },
     async (args: z.infer<typeof PlanGetInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "plan_get requires project scope");
-        }
-        const parsed = PlanGetInput.parse(args);
-        const row = deps.projectDb.prepare("SELECT root_path FROM project WHERE id=1").get() as
-          | { root_path: string }
-          | undefined;
-        if (!row) throw new McpError("E_STATE_INVALID", "project row missing");
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "plan_get requires project scope");
+          }
+          const parsed = PlanGetInput.parse(args);
+          const row = deps.projectDb.prepare("SELECT root_path FROM project WHERE id=1").get() as
+            | { root_path: string }
+            | undefined;
+          if (!row) throw new McpError("E_STATE_INVALID", "project row missing");
 
-        const paths = {
-          plan_md: join(row.root_path, "plans", `${parsed.name}-plan.md`),
-          todo_md: join(row.root_path, "plans", `${parsed.name}-todo.md`),
-          manifest_md: join(row.root_path, "plans", `${parsed.name}-manifest.md`),
-        };
+          const paths = {
+            plan_md: join(row.root_path, "plans", `${parsed.name}-plan.md`),
+            todo_md: join(row.root_path, "plans", `${parsed.name}-todo.md`),
+            manifest_md: join(row.root_path, "plans", `${parsed.name}-manifest.md`),
+          };
 
-        const found: string[] = [];
-        const bodies: Record<string, string> = {};
-        for (const [k, p] of Object.entries(paths)) {
-          const canonical = await assertInsideAllowedRoot(p, deps.config.workspace.allowed_roots);
-          if (!existsSync(canonical)) continue;
-          found.push(canonical);
-          if (parsed.expand) bodies[k] = await readFile(canonical, "utf8");
-        }
-        if (found.length === 0) {
-          throw new McpError("E_NOT_FOUND", `no plan files for name "${parsed.name}"`);
-        }
+          const found: string[] = [];
+          const bodies: Record<string, string> = {};
+          for (const [k, p] of Object.entries(paths)) {
+            const canonical = await assertInsideAllowedRoot(p, deps.config.workspace.allowed_roots);
+            if (!existsSync(canonical)) continue;
+            found.push(canonical);
+            if (parsed.expand) bodies[k] = await readFile(canonical, "utf8");
+          }
+          if (found.length === 0) {
+            throw new McpError("E_NOT_FOUND", `no plan files for name "${parsed.name}"`);
+          }
 
-        const payload = success(
-          found,
-          `Found ${found.length}/3 plan file(s) for "${parsed.name}".`,
-          {
-            ...(parsed.expand
-              ? { content: bodies }
-              : { expand_hint: "Call plan_get with expand=true to include the bodies." }),
-          },
-        );
-        try {
+          const payload = success(
+            found,
+            `Found ${found.length}/3 plan file(s) for "${parsed.name}".`,
+            {
+              ...(parsed.expand
+                ? { content: bodies }
+                : { expand_hint: "Call plan_get with expand=true to include the bodies." }),
+            },
+          );
+          return payload;
+        },
+        (payload) => {
+          const pr = deps.projectDb?.prepare("SELECT root_path FROM project WHERE id=1").get() as
+            | { root_path: string }
+            | undefined;
           writeAudit(deps.globalDb, {
             tool: "plan_get",
             scope: "project",
-            project_root: row.root_path,
-            inputs: parsed,
+            project_root: pr?.root_path ?? null,
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }

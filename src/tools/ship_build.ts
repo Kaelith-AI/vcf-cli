@@ -70,92 +70,104 @@ export function registerShipBuild(server: McpServer, deps: ServerDeps): void {
       inputSchema: ShipBuildInput.shape,
     },
     async (args, extra) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "ship_build requires project scope");
-        }
-        const parsed = ShipBuildInput.parse(args);
-        const projectRoot = readProjectRoot(deps);
-        if (!projectRoot) throw new McpError("E_STATE_INVALID", "project row missing");
-        const signal = extra?.signal as AbortSignal | undefined;
+      // Captured during body; onComplete uses these so stdout/stderr tails
+      // and unredacted env values never reach the audit log.
+      let auditInputs: unknown = args;
+      let auditOutputs: unknown = undefined;
+      let auditResultCode: string | undefined;
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "ship_build requires project scope");
+          }
+          const parsed = ShipBuildInput.parse(args);
+          auditInputs = {
+            ...parsed,
+            targets: parsed.targets.map((t) => ({
+              ...t,
+              env: t.env ? Object.keys(t.env) : [],
+            })),
+          };
+          const projectRoot = readProjectRoot(deps);
+          if (!projectRoot) throw new McpError("E_STATE_INVALID", "project row missing");
+          const signal = extra?.signal as AbortSignal | undefined;
 
-        const results: TargetResult[] = [];
-        let anyFailure = false;
+          const results: TargetResult[] = [];
+          let anyFailure = false;
 
-        for (const target of parsed.targets) {
-          throwIfCanceled(signal);
-          const cwd = await assertInsideAllowedRoot(
-            target.cwd ?? projectRoot,
-            deps.config.workspace.allowed_roots,
-          );
-          const startedAt = Date.now();
-          const result = await runTarget(target, cwd, signal);
-          results.push(result);
-
-          const passed = result.exit_code === 0 && !result.timed_out && !result.canceled;
-          deps.projectDb
-            .prepare(
-              `INSERT INTO builds (target, started_at, finished_at, status, output_path)
-               VALUES (?, ?, ?, ?, ?)`,
-            )
-            .run(
-              `ship:${target.name}`,
-              startedAt,
-              startedAt + result.duration_ms,
-              passed ? "success" : result.canceled ? "canceled" : "failed",
-              null,
+          for (const target of parsed.targets) {
+            throwIfCanceled(signal);
+            const cwd = await assertInsideAllowedRoot(
+              target.cwd ?? projectRoot,
+              deps.config.workspace.allowed_roots,
             );
-          if (result.canceled) {
-            throw new McpError("E_CANCELED", `ship_build canceled during target '${target.name}'`);
-          }
-          if (!passed) {
-            anyFailure = true;
-            if (parsed.stop_on_first_failure) break;
-          }
-        }
+            const startedAt = Date.now();
+            const result = await runTarget(target, cwd, signal);
+            results.push(result);
 
-        const summary = anyFailure
-          ? `ship_build FAILED: ${results.filter((r) => r.exit_code !== 0 || r.timed_out).length}/${results.length} target(s) failed.`
-          : `ship_build OK: ${results.length} target(s) succeeded.`;
-        const payload = success(
-          [projectRoot],
-          summary,
-          parsed.expand
-            ? { content: { results, any_failure: anyFailure } }
-            : {
-                expand_hint: "Call ship_build with expand=true for stdout/stderr tails per target.",
-              },
-        );
-        try {
+            const passed = result.exit_code === 0 && !result.timed_out && !result.canceled;
+            deps.projectDb
+              .prepare(
+                `INSERT INTO builds (target, started_at, finished_at, status, output_path)
+               VALUES (?, ?, ?, ?, ?)`,
+              )
+              .run(
+                `ship:${target.name}`,
+                startedAt,
+                startedAt + result.duration_ms,
+                passed ? "success" : result.canceled ? "canceled" : "failed",
+                null,
+              );
+            if (result.canceled) {
+              throw new McpError(
+                "E_CANCELED",
+                `ship_build canceled during target '${target.name}'`,
+              );
+            }
+            if (!passed) {
+              anyFailure = true;
+              if (parsed.stop_on_first_failure) break;
+            }
+          }
+
+          const summary = anyFailure
+            ? `ship_build FAILED: ${results.filter((r) => r.exit_code !== 0 || r.timed_out).length}/${results.length} target(s) failed.`
+            : `ship_build OK: ${results.length} target(s) succeeded.`;
+          const payload = success(
+            [projectRoot],
+            summary,
+            parsed.expand
+              ? { content: { results, any_failure: anyFailure } }
+              : {
+                  expand_hint:
+                    "Call ship_build with expand=true for stdout/stderr tails per target.",
+                },
+          );
+          auditOutputs = {
+            ...payload,
+            content: {
+              any_failure: anyFailure,
+              results: results.map((r) => ({
+                ...r,
+                stdout_tail: "<redacted>",
+                stderr_tail: "<redacted>",
+              })),
+            },
+          };
+          auditResultCode = anyFailure ? "E_INTERNAL" : "ok";
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "ship_build",
             scope: "project",
-            project_root: projectRoot,
-            inputs: {
-              ...parsed,
-              targets: parsed.targets.map((t) => ({
-                ...t,
-                env: t.env ? Object.keys(t.env) : [],
-              })),
-            },
-            outputs: {
-              ...payload,
-              content: {
-                any_failure: anyFailure,
-                results: results.map((r) => ({
-                  ...r,
-                  stdout_tail: "<redacted>",
-                  stderr_tail: "<redacted>",
-                })),
-              },
-            },
-            result_code: anyFailure ? "E_INTERNAL" : "ok",
+            project_root: readProjectRoot(deps),
+            inputs: auditInputs,
+            outputs: auditOutputs ?? payload,
+            result_code: auditResultCode ?? (payload.ok ? "ok" : payload.code),
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }
@@ -178,10 +190,11 @@ function runTarget(
       stdio: ["ignore", "pipe", "pipe"],
     });
 
+    let killTimer: NodeJS.Timeout | null = null;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
-      setTimeout(() => {
+      killTimer = setTimeout(() => {
         if (!child.killed) child.kill("SIGKILL");
       }, 2_000);
     }, target.timeout_ms);
@@ -206,6 +219,7 @@ function runTarget(
 
     const finish = (code: number | null, sig: NodeJS.Signals | null): void => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       if (signal) signal.removeEventListener("abort", onAbort);
       resolve({
         name: target.name,

@@ -42,75 +42,78 @@ export function registerBuildContext(server: McpServer, deps: ServerDeps): void 
       inputSchema: BuildContextInput.shape,
     },
     async (args: z.infer<typeof BuildContextInput>) => {
-      return runTool(async () => {
-        if (!deps.projectDb) {
-          throw new McpError("E_STATE_INVALID", "build_context requires project scope");
-        }
-        const parsed = BuildContextInput.parse(args);
-        const root = readProjectRoot(deps);
-        if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
+      return runTool(
+        async () => {
+          if (!deps.projectDb) {
+            throw new McpError("E_STATE_INVALID", "build_context requires project scope");
+          }
+          const parsed = BuildContextInput.parse(args);
+          const root = readProjectRoot(deps);
+          if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 
-        const builderMd = await readTemplate("builder.md.tpl");
-        const standards = await readOptionalKbFile(deps, join("standards", "company-standards.md"));
-        const vibeBp = await findBestPracticeByName(deps, "vibe-coding");
-        const typedBp =
-          parsed.builder_type === "generic"
-            ? null
-            : await findBestPracticeByName(deps, parsed.builder_type);
+          const builderMd = await readTemplate("builder.md.tpl");
+          const standards = await readOptionalKbFile(
+            deps,
+            join("standards", "company-standards.md"),
+          );
+          const vibeBp = await findBestPracticeByName(deps, "vibe-coding");
+          const typedBp =
+            parsed.builder_type === "generic"
+              ? null
+              : await findBestPracticeByName(deps, parsed.builder_type);
 
-        // Read plan files (tolerate missing — a user may call build_context
-        // before plan_save for exploration).
-        const planPaths = {
-          plan: join(root, "plans", `${parsed.plan_name}-plan.md`),
-          todo: join(root, "plans", `${parsed.plan_name}-todo.md`),
-          manifest: join(root, "plans", `${parsed.plan_name}-manifest.md`),
-        };
-        const planBodies: Record<string, string | null> = {};
-        for (const [k, p] of Object.entries(planPaths)) {
-          const canonical = await assertInsideAllowedRoot(p, deps.config.workspace.allowed_roots);
-          planBodies[k] = existsSync(canonical) ? await readFile(canonical, "utf8") : null;
-        }
+          // Read plan files (tolerate missing — a user may call build_context
+          // before plan_save for exploration).
+          const planPaths = {
+            plan: join(root, "plans", `${parsed.plan_name}-plan.md`),
+            todo: join(root, "plans", `${parsed.plan_name}-todo.md`),
+            manifest: join(root, "plans", `${parsed.plan_name}-manifest.md`),
+          };
+          const planBodies: Record<string, string | null> = {};
+          for (const [k, p] of Object.entries(planPaths)) {
+            const canonical = await assertInsideAllowedRoot(p, deps.config.workspace.allowed_roots);
+            planBodies[k] = existsSync(canonical) ? await readFile(canonical, "utf8") : null;
+          }
 
-        // Read decision log entries + response log so the builder doesn't
-        // re-open resolved items.
-        const decisions = readDecisions(deps);
-        const responseLogPath = join(root, "plans", "reviews", "response-log.md");
-        const responseLog = existsSync(responseLogPath)
-          ? await readFile(responseLogPath, "utf8")
-          : null;
+          // Read decision log entries + response log so the builder doesn't
+          // re-open resolved items.
+          const decisions = readDecisions(deps);
+          const responseLogPath = join(root, "plans", "reviews", "response-log.md");
+          const responseLog = existsSync(responseLogPath)
+            ? await readFile(responseLogPath, "utf8")
+            : null;
 
-        const contextContent = {
-          plan_name: parsed.plan_name,
-          builder_type: parsed.builder_type,
-          builder_md: builderMd,
-          standards_md: standards,
-          vibe_best_practice_md: vibeBp,
-          type_best_practice_md: typedBp,
-          plan: planBodies,
-          decisions,
-          response_log_md: responseLog,
-        };
-        const payload = success(
-          Object.values(planPaths),
-          `Build context for "${parsed.plan_name}" (builder_type=${parsed.builder_type}); ${Object.values(planBodies).filter(Boolean).length}/3 plan files present.`,
-          parsed.expand
-            ? { content: contextContent }
-            : { expand_hint: "Call build_context with expand=true for the assembled payload." },
-        );
-        try {
+          const contextContent = {
+            plan_name: parsed.plan_name,
+            builder_type: parsed.builder_type,
+            builder_md: builderMd,
+            standards_md: standards,
+            vibe_best_practice_md: vibeBp,
+            type_best_practice_md: typedBp,
+            plan: planBodies,
+            decisions,
+            response_log_md: responseLog,
+          };
+          const payload = success(
+            Object.values(planPaths),
+            `Build context for "${parsed.plan_name}" (builder_type=${parsed.builder_type}); ${Object.values(planBodies).filter(Boolean).length}/3 plan files present.`,
+            parsed.expand
+              ? { content: contextContent }
+              : { expand_hint: "Call build_context with expand=true for the assembled payload." },
+          );
+          return payload;
+        },
+        (payload) => {
           writeAudit(deps.globalDb, {
             tool: "build_context",
             scope: "project",
-            project_root: root,
-            inputs: parsed,
+            project_root: readProjectRoot(deps),
+            inputs: args,
             outputs: payload,
-            result_code: "ok",
+            result_code: payload.ok ? "ok" : payload.code,
           });
-        } catch {
-          /* non-fatal */
-        }
-        return payload;
-      });
+        },
+      );
     },
   );
 }
