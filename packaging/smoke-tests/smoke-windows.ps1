@@ -279,15 +279,35 @@ try {
 
   $mcpRequest = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
 
+  # The npm-global shim for vcf-mcp is a .ps1 / .cmd trio that dispatches
+  # to the real .js file. Running the shim through .NET Process trips two
+  # separate footguns:
+  #   - node can't exec a .ps1 (it tries to parse as JS and errors)
+  #   - cmd.exe's .cmd shim doesn't reliably forward a stdin-close to the
+  #     child, so a request/close/read round-trip can hang
+  # Resolve the underlying dist/mcp.js and invoke it via `node` directly.
   $vcfMcpPath = (Get-Command vcf-mcp -ErrorAction SilentlyContinue).Source
-  if (-not $vcfMcpPath) {
-    Write-Host "  [ ] vcf-mcp responds to initialize (binary not found)" -ForegroundColor Red
+  $mcpJs = $null
+  if ($vcfMcpPath) {
+    # Walk the standard npm-global layout to find the real .js entry.
+    $candidate = Join-Path (Split-Path $vcfMcpPath -Parent) "node_modules\@kaelith-labs\cli\dist\mcp.js"
+    if (Test-Path $candidate) { $mcpJs = $candidate }
+  }
+  if (-not $mcpJs) {
+    # Homebrew-style install (libexec layout) — just in case this script
+    # is ever run against an npm-via-homebrew setup.
+    $brewCandidate = "$env:LOCALAPPDATA\scoop\apps\vcf-cli\current\package\dist\mcp.js"
+    if (Test-Path $brewCandidate) { $mcpJs = $brewCandidate }
+  }
+
+  if (-not $mcpJs) {
+    Write-Host "  [ ] vcf-mcp responds to initialize (could not locate dist/mcp.js)" -ForegroundColor Red
     $script:Fail++
-    $script:Results.Add("FAIL  vcf-mcp responds to initialize (binary not found)")
+    $script:Results.Add("FAIL  vcf-mcp responds to initialize (mcp.js not found)")
   } else {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $vcfMcpPath
-    $psi.Arguments = "--scope global"
+    $psi.FileName = "node"
+    $psi.Arguments = "`"$mcpJs`" --scope global"
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
@@ -299,24 +319,21 @@ try {
       $proc = [System.Diagnostics.Process]::Start($psi)
       $proc.StandardInput.WriteLine($mcpRequest)
       $proc.StandardInput.Close()
-      if (-not $proc.WaitForExit(10000)) {
-        $proc.Kill() | Out-Null
-        Write-Host "  [ ] vcf-mcp responds to initialize (timeout)" -ForegroundColor Red
-        $script:Fail++
-        $script:Results.Add("FAIL  vcf-mcp responds to initialize (timeout)")
+      # Read the first JSON-RPC line; the server writes one frame per
+      # newline. ReadLine blocks until the line lands or stdout closes,
+      # both of which happen well under our budget.
+      $line = $proc.StandardOutput.ReadLine()
+      if ($line -and $line -match '"result"' -and $line -match '"serverInfo"') {
+        Write-Host "  [x] vcf-mcp responds to initialize" -ForegroundColor Green
+        $script:Pass++
+        $script:Results.Add("PASS  vcf-mcp responds to initialize")
       } else {
-        $stdout = $proc.StandardOutput.ReadToEnd()
-        if ($stdout -match '"result"' -and $stdout -match '"serverInfo"') {
-          Write-Host "  [x] vcf-mcp responds to initialize" -ForegroundColor Green
-          $script:Pass++
-          $script:Results.Add("PASS  vcf-mcp responds to initialize")
-        } else {
-          Write-Host "  [ ] vcf-mcp responds to initialize (unexpected output)" -ForegroundColor Red
-          ($stdout -split "`n") | Select-Object -First 5 | ForEach-Object { "      | $_" } | Write-Host
-          $script:Fail++
-          $script:Results.Add("FAIL  vcf-mcp responds to initialize")
-        }
+        Write-Host "  [ ] vcf-mcp responds to initialize (unexpected output)" -ForegroundColor Red
+        if ($line) { Write-Host "      | $line" }
+        $script:Fail++
+        $script:Results.Add("FAIL  vcf-mcp responds to initialize")
       }
+      if (-not $proc.HasExited) { $proc.Kill() | Out-Null }
     } finally {
       if ($proc -and -not $proc.HasExited) { $proc.Kill() | Out-Null }
     }
