@@ -154,7 +154,16 @@ endpoint/model arguments by routing through `config.yaml`.
 ### MCP compatibility
 
 - MCP spec `2025-11-25`. `@modelcontextprotocol/sdk ^1.29`. Node `>=22.13`.
-- **31 → 32 MCP tools** (`project_init_existing` added).
+- **34 → 38 MCP tools.** New since v0.3.2:
+  - `project_init_existing` (global scope) — adopt a pre-existing repo as a VCF project.
+  - `lesson_log_add` (project scope) — write a lesson; dual-writes to the project DB and the global lessons mirror (`~/.vcf/lessons.db`) after redaction. Phase-2 A.
+  - `lesson_search` (project scope) — query project/global/all lessons. Phase-2 A. Cross-project reads are intentional; see **Security boundaries** below.
+  - `lifecycle_report` (project scope) — structured + narrative project report. Narrative mode routes project metadata outbound to `config.defaults.lifecycle_report`. Phase-2 C.
+
+### Security boundaries documented for this release
+
+- **Global lessons mirror is cross-project queryable by design.** Any project-scope MCP session that calls `lesson_search({ scope: "global" | "all" })` will read lessons mirrored from every project that has written to `~/.vcf/lessons.db`. The design intent is cross-project learning for a single operator on a single workstation. On shared or multi-tenant machines, operators must either (a) not write lessons from projects under confidentiality constraints, (b) set `config.lessons.global_db_path: null` to disable the mirror, or (c) keep `scope` at its default `"project"` in sessions where cross-project reads are unwanted. A config flag to harden this per-project is tracked as followup #41.
+- **`lifecycle_report` narrative mode sends project-derived data outbound.** The same data-classification and trust-level reasoning that applies to `review_execute` applies here: audit activity, review history, response-log entries, decisions, builds, and lesson titles/tags are serialized into the prompt, redacted, and sent to the endpoint named by `config.defaults.lifecycle_report`. Operators must choose an endpoint whose residency/retention terms match the project's data classification. Redaction is not confidentiality.
 
 ---
 

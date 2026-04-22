@@ -173,6 +173,8 @@ Each `review_execute` call loads a **per-model calibration overlay** on top of t
 - **Structured** (`mode: structured`) — deterministic, no LLM call. Writes `plans/lifecycle-report.md` + `lifecycle-report.json`. Target: under 2s on a 10K-audit-row project (enforced by `test/perf/lifecycle_report_10k.test.ts`). The JSON is a versioned contract (`src/schemas/lifecycle-report.schema.ts`); downstream tools can consume it without re-implementing the assembly.
 - **Narrative** (`mode: narrative`) — fan out per-section LLM calls to `config.defaults.lifecycle_report` (one call per non-project section, redacted before send). Output carries a `generated_by: { model_id, endpoint }` footer plus a pointer back to the structured JSON so a reader can cross-check the prose. Target: under 60s on the same dataset.
 
+> **Outbound data-routing warning (narrative mode).** Narrative mode serializes a broad slice of project state into the prompt: audit activity, review history, response-log entries, decisions, builds, and lesson titles/tags. Redaction runs pre-send (same pipeline as `review_execute`), and the endpoint is whatever `config.defaults.lifecycle_report` names — which can be local (Ollama / CLIProxyAPI on trusted local network) or public. Choose an endpoint whose residency and retention terms match the project's data classification. **Redaction is not confidentiality.** For projects under NDA or regulated data handling, either run narrative mode only against a local-trust endpoint or stay on structured mode, which never calls an LLM.
+
 The CLI flags mirror the tool: `--mode structured|narrative`, `--format md|json|both`, `--include <csv>`, `--frontier` (opt into public-trust endpoints for narrative mode).
 
 ### 7.5. Log lessons (during or after any phase)
@@ -184,6 +186,8 @@ The CLI flags mirror the tool: `--mode structured|narrative`, `--format md|json|
 Each lesson is persisted twice: once in `<project>/.vcf/project.db`, once mirrored into the cross-project global lessons DB at `config.lessons.global_db_path` (default `~/.vcf/lessons.db`). The project copy is authoritative; the mirror enables `lesson_search({ scope: "global" | "all" })` across every project that's opted in.
 
 `lesson_search` accepts `query` (substring), `tags` (AND-filter), `stage`, `scope`, and `limit` (default 20, max 200). Ranking: `tag-hit-count × 2 + title-exact 10 / title-prefix 5 / title-contains 3 / body-contains 1`. `expand=true` attaches the observation + context bodies; the default envelope returns metadata only to keep the token cost low.
+
+> **Cross-project trust boundary.** The global lessons mirror is a **single-operator, single-workstation** convenience: any project-scope MCP session on this workstation can read every lesson written from every other project on the same workstation by passing `scope: "global"` or `scope: "all"`. That is the design intent — a vibe coder's universal lessons should be queryable from anywhere. It is **not** a multi-tenant boundary: if two projects on the same machine must not share lessons (e.g., one is under NDA), the operator must either (a) keep all `lesson_search` calls at the default `scope: "project"`, (b) avoid writing lessons from the sensitive project, or (c) set `config.lessons.global_db_path: null` in `~/.vcf/config.yaml` to disable the mirror entirely. A per-project opt-in/out knob is tracked as followup #41.
 
 ### 8. Ship
 

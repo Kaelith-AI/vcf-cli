@@ -140,7 +140,7 @@ Per user-input path:
 - `lifecycle_report` narrative mode with a hostile project name (`--project '; DROP TABLE audit;--'`): assert `assertInsideAllowedRoot` refuses the path.
 
 Per scale target (10× spec's named target):
-- Lessons DB: 10,000 entries + 1,000 tag-distinct rows. `lesson_search({query, tags})` p95 <100ms.
+- Lessons DB: 10,000 entries + 1,000 tag-distinct rows. `lesson_search({query, tags})` p95 <100ms. **Scale target pending SQL-pushdown work — followup #40.** The v0.5.0 implementation does a full-table read from each scope then filters/ranks in JS. For the realistic near-term corpus (≤1k lessons on a single workstation) this is fast in practice (sub-10ms local), but the 10k target is aspirational until the search path pushes predicates into SQLite. Narrow the published claim to "sub-100ms at ≤1k lessons" until then.
 - Lifecycle report: project with 10,000 audit rows + 500 artifacts + 100 review runs. Structured mode <2s; narrative <60s.
 - Reviewer overlay resolution: 32 tools × 3 review types × 2 trust-levels × 9 stages = 1728 resolutions in a single review run. Overlay cache must hit.
 
