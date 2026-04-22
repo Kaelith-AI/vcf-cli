@@ -382,9 +382,9 @@ describe("e2e: full lifecycle", () => {
         await projClient.callTool({
           name: "response_log_add",
           arguments: {
-            review_run_id: run1,
-            stance: "agree",
-            note: "Will address in the config loader refactor next milestone.",
+            run_id: run1,
+            builder_claim: "agree",
+            response_text: "Will address in the config loader refactor next milestone.",
             expand: true,
           },
         }),

@@ -91,8 +91,9 @@ async function main() {
       result = await request("tools/list", {});
       console.log(JSON.stringify(result.result?.tools?.map((t) => t.name).sort() ?? result, null, 2));
     } else if (cmd === "call") {
-      const [name, argsJson = "{}"] = rest;
-      const reply = await request("tools/call", { name, arguments: JSON.parse(argsJson) });
+      const [name, argsJson = "{}", timeoutMsArg] = rest;
+      const timeout = timeoutMsArg ? Number(timeoutMsArg) : 120_000;
+      const reply = await request("tools/call", { name, arguments: JSON.parse(argsJson) }, timeout);
       console.log(JSON.stringify(parseEnv(reply), null, 2));
     } else if (cmd === "spec-save-from-file") {
       const [specFile] = rest;

@@ -159,7 +159,9 @@ The reviewer LLM produces `{verdict: PASS|NEEDS_WORK|BLOCK, summary, findings, c
 
 Stage-entry rule: Stage N>1 **requires** Stage N-1 PASS unless `force: true` (audited). Re-running a passed stage creates a new run id and marks the prior row `superseded`.
 
-Builder responds via `/log-response` — disagreements are respected by future reviewers.
+Builder responds via `/log-response` — disagreements are respected by future reviewers. `response_log_add` takes `{ run_id, finding_ref?, builder_claim, response_text, references? }` and persists to `project.db.response_log`; the rendered markdown view at `plans/reviews/response-log.md` is regenerated on every write so reviewers always see a consistent append-only record.
+
+Each `review_execute` call loads a **per-model calibration overlay** on top of the base reviewer role: the resolver walks `reviewer-<type>.<family>.md → reviewer-<type>.<trust-level>.md → reviewer-<type>.md` and picks the most specific one available. Family overlays (e.g. `reviewer-code.qwen.md`) are opt-in; `.frontier` and `.local` trust-level overlays ship by default and correct the known calibration biases surfaced during dual-model dogfooding (frontier over-flags with padded findings; local hallucinates on redaction markers and keyword shape). The applied overlay shows up in the `review_execute` envelope so you can confirm which calibration was in effect.
 
 ### 7.5. Log lessons (during or after any phase)
 

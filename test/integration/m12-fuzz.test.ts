@@ -135,7 +135,7 @@ describe("M12 fuzz: every tool rejects malformed input safely", () => {
     ["build_swap", [{}, { from_type: "bogus", to_type: "frontend", plan_name: "x" }]],
     ["decision_log_add", [{}, { title: "", context: "", decision: "", consequences: "" }]],
     ["decision_log_list", [{ limit: -1 }]],
-    ["response_log_add", [{}, { review_run_id: "", stance: "maybe", note: "" }]],
+    ["response_log_add", [{}, { run_id: "", builder_claim: "maybe", response_text: "" }]],
     ["test_generate", [{ kinds: ["bogus"] }, { dependencies: ["BadFormat"] }]],
     ["test_execute", [{}, { command: "" }]],
     ["test_analyze", [{ exit_code: "not-a-number" }]],

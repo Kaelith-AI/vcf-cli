@@ -232,4 +232,27 @@ export const PROJECT_MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_lessons_created_at ON lessons(created_at);
     `,
   },
+  {
+    version: 4,
+    name: "response_log_formal_schema",
+    up: `
+      -- Phase-2 inward loop (#22). Evolve the v1 response_log table to the
+      -- formal schema: run_id + builder_claim + response_text + finding_ref
+      -- + references_json. Existing rows (from the M5 surface) preserve
+      -- their data; finding_ref is NULL for legacy rows because they
+      -- responded to a whole review run, not a specific finding.
+      -- SQLite ≥ 3.25 rewrites the CHECK constraint automatically when a
+      -- column referenced by it is renamed.
+      ALTER TABLE response_log RENAME COLUMN review_run_id TO run_id;
+      ALTER TABLE response_log RENAME COLUMN stance TO builder_claim;
+      ALTER TABLE response_log RENAME COLUMN note TO response_text;
+      ALTER TABLE response_log ADD COLUMN finding_ref TEXT;
+      ALTER TABLE response_log ADD COLUMN references_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE response_log ADD COLUMN migration_note TEXT;
+      -- Existing idx_response_log_run follows the renamed column (SQLite
+      -- re-points internal name). Add a finding_ref index for the common
+      -- "has the builder responded to this specific finding?" query.
+      CREATE INDEX IF NOT EXISTS idx_response_log_finding ON response_log(finding_ref);
+    `,
+  },
 ];

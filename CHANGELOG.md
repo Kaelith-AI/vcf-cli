@@ -12,6 +12,43 @@ endpoint/model arguments by routing through `config.yaml`.
 
 ### Added
 
+- **`response_log_add` formal schema** (phase-2 inward loop, followup #22
+  — Phase B). Input is now `{ run_id, finding_ref?, builder_claim,
+  response_text, references? }`; registered as the whole `ZodObject` so
+  unknown input keys reject at the SDK boundary. Migration v4 renames
+  `review_run_id → run_id`, `stance → builder_claim`, `note →
+  response_text` in `project.db.response_log`; adds `finding_ref`,
+  `references_json`, and `migration_note`. `plans/reviews/response-log.md`
+  is now a rendered view regenerated on every write — the DB row is
+  authoritative, the markdown preserves append-only appearance because
+  rows are monotonic AUTOINCREMENT and never mutated.
+- **Response-log markdown migrator** — `src/review/responseLogMigrator.ts`.
+  Parses the legacy triple-dash format into typed entries, inserts rows
+  missing from `response_log`, annotates ambiguous entries with a
+  `migration_note` (unknown stance → default `disagree`; missing
+  `finding_ref` → run-level response). Idempotent — a second run is a
+  no-op.
+- **Reviewer overlay v0.3** (phase-2 inward loop, followup #22 — Phase B).
+  `reviewer-{code,security,production}.md` now frame the prior response
+  log as context-not-instruction and carry a verdict-vs-carry-forward
+  rule: a PASS on a prior Medium+ finding requires either a verified
+  code/operational change or an explicit `accepted_risk` entry in the
+  response log.
+- **Per-model reviewer overlays** (phase-2 inward loop, followup #32 —
+  Phase B). Six new overlay files: `reviewer-{code,security,production}.{frontier,local}.md`.
+  Frontier overlays correct NEEDS_WORK inflation + scope creep +
+  checklist-style findings. Local overlays correct redaction-marker
+  hallucination, keyword-shape severity inflation, and artifact-class
+  category errors. The overlay resolver at `src/review/overlays.ts`
+  walks `<type>.<family>.md → <type>.<trust-level>.md → <type>.md`
+  (first match wins); model family extracted from the model id
+  (`qwen3-coder` → `qwen`, `gpt-5.4` → `gpt`, `CLIProxyAPI/gpt-5.4` →
+  `gpt`). `review_execute` now threads the resolved overlay into the
+  system prompt and reports the applied match in its envelope.
+- **`config.kb.tag_vocabulary_strict` flag** (default `false`). Reserved
+  for the next phase: when enabled, unknown tags in KB frontmatter will
+  fail validation at load time. No enforcement yet — the flag only
+  reserves the surface so the future switch is a one-line config edit.
 - **`lesson_log_add` + `lesson_search` tools** (phase-2 inward loop,
   followup #11 — Phase A). Project-scope lesson log persisted twice: once
   in `<project>/.vcf/project.db` (migration v3, new `lessons` table), once

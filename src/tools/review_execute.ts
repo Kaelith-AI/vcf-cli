@@ -38,6 +38,7 @@ import {
   type Severity,
 } from "../review/submitCore.js";
 import { CARRY_FORWARD_SECTIONS, type CarryForwardSection } from "../review/carryForward.js";
+import { readOverlayBundle, type OverlayBundle, type ReviewType } from "../review/overlays.js";
 
 const ReviewExecuteInput = z
   .object({
@@ -139,7 +140,21 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
               `run directory ${runDir} missing — call review_prepare first`,
             );
           }
-          const messages = await composeMessages(runDir, run);
+          const modelId =
+            parsed.model_id ?? deps.config.defaults?.review?.model ?? pickModelId(deps, run.type);
+
+          // Per-model overlay resolution (#32). Load the base reviewer role
+          // and the most specific overlay available (family > trust-level >
+          // base). The overlay is appended to the system prompt so its
+          // calibration corrections are the last thing the model sees.
+          const overlay = await readOverlayBundle({
+            kbRoot: deps.config.kb.root,
+            reviewType: run.type as ReviewType,
+            modelId,
+            trustLevel: endpoint.trust_level,
+          });
+
+          const messages = await composeMessages(runDir, run, overlay);
           // Always redact outgoing content — secrets should not leave the box
           // even to a local endpoint the operator might later aim elsewhere.
           const redactedMessages = redact(messages) as ChatMessage[];
@@ -150,9 +165,6 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
           const timer = setTimeout(() => ctrl.abort(), parsed.timeout_ms);
           const onAbort = (): void => ctrl.abort();
           mcpSignal?.addEventListener("abort", onAbort);
-
-          const modelId =
-            parsed.model_id ?? deps.config.defaults?.review?.model ?? pickModelId(deps, run.type);
           // Per-endpoint provider_options (config.yaml's endpoint block).
           // Set to e.g. {num_ctx: 131072, num_predict: 8192} for Ollama
           // endpoints so prompts aren't silently truncated at 2048 tokens
@@ -220,7 +232,7 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
 
           return success(
             [reportPath],
-            `review_execute: ${run.type} stage ${run.stage} verdict=${submission.verdict} (endpoint=${endpoint.name}, model=${modelId}).`,
+            `review_execute: ${run.type} stage ${run.stage} verdict=${submission.verdict} (endpoint=${endpoint.name}, model=${modelId}, overlay=${overlay.overlayMatch}).`,
             parsed.expand
               ? {
                   content: {
@@ -229,6 +241,11 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
                     verdict: submission.verdict,
                     endpoint: endpoint.name,
                     model_id: modelId,
+                    overlay: {
+                      match: overlay.overlayMatch,
+                      family: overlay.family,
+                      path: overlay.overlayPath,
+                    },
                     carry_forward: merged,
                   },
                 }
@@ -254,9 +271,17 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function composeMessages(runDir: string, run: ReviewRunRow): Promise<ChatMessage[]> {
+async function composeMessages(
+  runDir: string,
+  run: ReviewRunRow,
+  overlay?: OverlayBundle,
+): Promise<ChatMessage[]> {
   const stageText = await readIf(join(runDir, `stage-${run.stage}.${run.type}.md`));
-  const reviewerText = await readIf(join(runDir, `reviewer-${run.type}.md`));
+  // The run dir's copy of reviewer-<type>.md is the prepare-time snapshot;
+  // the resolved overlay from the KB is authoritative when the caller
+  // passes one. Prefer the KB-resolved base so Phase-2 overlays land even
+  // on pre-existing run directories prepared before the resolver shipped.
+  const reviewerText = overlay?.base ?? (await readIf(join(runDir, `reviewer-${run.type}.md`)));
   const carryForwardText = await readIf(join(runDir, "carry-forward.yaml"));
   const decisionsText = await readIf(join(runDir, "decisions.snapshot.md"));
   const responseLogText = await readIf(join(runDir, "response-log.snapshot.md"));
@@ -264,6 +289,11 @@ async function composeMessages(runDir: string, run: ReviewRunRow): Promise<ChatM
 
   const systemParts: string[] = [];
   if (reviewerText) systemParts.push(reviewerText);
+  if (overlay?.overlay) {
+    systemParts.push(
+      `## Model-family calibration overlay (${overlay.overlayMatch}, family=${overlay.family ?? "unknown"})\n\n${overlay.overlay}`,
+    );
+  }
   systemParts.push(
     [
       "",

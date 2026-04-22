@@ -417,9 +417,10 @@ describe("M5 plan / build / logs (project scope)", () => {
       await client.callTool({
         name: "response_log_add",
         arguments: {
-          review_run_id: "code-20260419T120000Z",
-          stance: "disagree",
-          note: "We intentionally swallow this error because the retry is idempotent — see ADR use-zod-v4.",
+          run_id: "code-20260419T120000Z",
+          builder_claim: "disagree",
+          response_text:
+            "We intentionally swallow this error because the retry is idempotent — see ADR use-zod-v4.",
           expand: true,
         },
       }),
@@ -427,7 +428,7 @@ describe("M5 plan / build / logs (project scope)", () => {
     expect(env.ok).toBe(true);
     const logPath = (env.content as { log_path: string }).log_path;
     const body = await readFile(logPath, "utf8");
-    expect(body).toMatch(/stance: disagree/);
+    expect(body).toMatch(/builder_claim: disagree/);
     expect(body).toMatch(/retry is idempotent/);
     const count = (
       projectDb.prepare("SELECT COUNT(*) as c FROM response_log").get() as { c: number }

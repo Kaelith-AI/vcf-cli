@@ -144,6 +144,12 @@ export const KnowledgeBaseSchema = z
     upstream_package: z.string().default("@kaelith-labs/kb"),
     // Third-party primer packs. Empty by default.
     packs: z.array(KbPackSchema).max(32).default([]),
+    // When true, KB entries whose frontmatter tags include tokens outside
+    // `kb/standards/tag-vocabulary.md` fail validation at load time with
+    // E_VALIDATION. Off by default through Phase 2 so the vocabulary can
+    // settle; will default to true in a later phase once curated tag sets
+    // stabilize across all primer packs.
+    tag_vocabulary_strict: z.boolean().default(false),
   })
   .strict();
 
