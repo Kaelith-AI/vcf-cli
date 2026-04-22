@@ -42,7 +42,7 @@ const MODELS = [
   {
     label: "gpt-5.4",
     endpoint: "litellm",
-    model_id: "OpenRouter/gpt-5.4",
+    model_id: "CLIProxyAPI/gpt-5.4",
     timeout_ms: 180_000,
   },
 ];
