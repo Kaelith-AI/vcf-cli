@@ -146,3 +146,43 @@ finding_ref: production:stage-2:mirror-state-durability
 Partial agree. On the documentation side, the overstated 'disable via null' claim is now fixed (see security/stage-1 response). On the runtime side, the reviewer's kernel — mirror failures swallowed with no replay — is a real supportability gap but is low-impact given current operating characteristics: mirror failures have never been observed across ~100 lesson writes in dogfood; the envelope surfaces them when they happen; and the project DB is authoritative so correctness is never at risk. Filed as followup #42 with the fix shape (mirror_status column on project.db.lessons, `vcf lessons reconcile` CLI subcommand, optional lazy-reconcile on next lesson_log_add). Not a 0.5.0 blocker — audit + envelope already give operators the signal; what's missing is the replay mechanism, which is Phase-3 material.
 
 ---
+---
+run_id: code-2-20260422T075145110Z
+builder_claim: agree
+created_at: 2026-04-22T08:00:05.979Z
+finding_ref: code:stage-2:overlay-live-kb-read
+---
+
+Real boundary leak. review_execute was resolving the reviewer overlay against the live KB at execute time, so KB edits between review_prepare and review_execute changed what the prepared run saw — a broken prepare→execute contract. Fixed: review_prepare now copies the base reviewer file plus every `reviewer-<type>.*.md` variant into the run dir (src/tools/review_prepare.ts copyReviewerFile). review_execute passes `reviewersDir: runDir` to readOverlayBundle (new opt on ResolveOverlayOpts in src/review/overlays.ts); resolution reads only the prepared snapshot. The base reviewer and every per-model/per-trust overlay are now frozen at prepare time. Overlay selection itself still happens at execute because it depends on model_id + trust_level which aren't known at prepare time — but the files it picks from are the snapshot, not live KB. test/integration/review_overlay_snapshot.test.ts proves this: KB edits after prepare do not leak into the snapshot's resolution path.
+
+---
+---
+run_id: code-2-20260422T075145110Z
+builder_claim: agree
+created_at: 2026-04-22T08:00:06.331Z
+finding_ref: code:stage-2:project-init-existing-shape
+---
+
+Legit inconsistency. project_init_existing was registered with `inputSchema: ProjectInitExistingInput.shape` while Phase-2 standardized on whole-ZodObject registration (`Schema` not `Schema.shape`) for lesson_log_add, lesson_search, response_log_add, lifecycle_report, etc. The shape path lets the SDK strip unknown keys silently at the protocol boundary; whole-schema rejection returns MCP error -32602 for unknown keys. One-line fix: `inputSchema: ProjectInitExistingInput` in src/tools/project_init_existing.ts. All other project-scope tools added this phase already follow the pattern.
+
+---
+---
+run_id: security-2-20260422T075149632Z
+builder_claim: agree
+created_at: 2026-04-22T08:00:06.670Z
+finding_ref: security:stage-2:endpoint-trust-gate-too-loose
+---
+
+Real exfiltration surface. Pre-fix, review_execute and lifecycle_report narrative mode only blocked `trust_level='public'` endpoints — `trust_level='trusted'` resolved silently from config.defaults was not gated. Config drift on defaults.review.endpoint could quietly route review bundles off-host. Tightened in src/tools/review_execute.ts and src/tools/lifecycle_report.ts: the gate now fires on any non-local endpoint resolved from defaults (no explicit endpoint arg) unless `allow_public_endpoint: true` is passed. Explicit endpoint arg is the consent signal that bypasses the defaults gate (public trust still always requires opt-in regardless). Error message names config.defaults.<tool>.endpoint + trust_level so the caller knows exactly what's routing where. test/integration/review_endpoint_trust_gate.test.ts covers the four paths: defaults+trusted rejected; explicit+trusted accepted; defaults+trusted+allow accepted; defaults+local accepted.
+
+---
+---
+run_id: production-4-20260422T075359850Z
+builder_claim: agree
+created_at: 2026-04-22T08:00:07.010Z
+finding_ref: harness:stop-on-accepted-residual
+---
+
+Not a review-surface finding — a harness bug caught during the re-gate. scripts/dogfood-plan/run-full-gate.mjs was stopping whenever any stage's carry_forward contained a non-info entry, even when the stage verdict itself was PASS. That misread the protocol: carry_forward with non-info severity IS the accepted-residual mechanism — a PASS stage with carried warnings is a legitimate outcome, not a halt signal. Fixed: harness now stops only on `verdict != PASS`. The reviewer's structured verdict is the source of truth; carry-forward is context for the next stage, not a gate against this one.
+
+---

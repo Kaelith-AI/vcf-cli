@@ -80,7 +80,7 @@ export function registerProjectInitExisting(server: McpServer, deps: ServerDeps)
       title: "Adopt Existing Project",
       description:
         "Bring an existing project directory under VCF tracking without re-scaffolding. Current mode: 'bypass' — creates .vcf/project.db + registry row, flags adopted=1. Future modes ('strict', 'reconstruct') will enforce or infer missing lifecycle artifacts. Use when you want to run review/portfolio tools against a project that wasn't born in VCF.",
-      inputSchema: ProjectInitExistingInput.shape,
+      inputSchema: ProjectInitExistingInput,
     },
     async (args: ProjectInitExistingArgs) => {
       return runTool(

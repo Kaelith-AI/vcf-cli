@@ -99,6 +99,7 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
           }
 
           // Endpoint resolution: explicit arg → config.defaults.review.endpoint.
+          const endpointFromDefaults = parsed.endpoint === undefined;
           const endpointName = parsed.endpoint ?? deps.config.defaults?.review?.endpoint;
           if (!endpointName) {
             throw new McpError(
@@ -113,10 +114,29 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
               `endpoint '${endpointName}' not in config.endpoints[]`,
             );
           }
+          // Public endpoints always gate. Silent-default routing to any
+          // non-local endpoint (including trust_level='trusted') also gates:
+          // the typical abuse path is config drift on defaults.review.endpoint
+          // that quietly sends review bundles off-host. Explicitly passing the
+          // endpoint is the consent signal that bypasses the defaults gate
+          // (public still gates regardless — trust_level='public' is the hard
+          // ceiling).
           if (endpoint.trust_level === "public" && !parsed.allow_public_endpoint) {
             throw new McpError(
               "E_STATE_INVALID",
               `endpoint '${endpoint.name}' has trust_level='public'; pass allow_public_endpoint=true to override`,
+            );
+          }
+          if (
+            endpointFromDefaults &&
+            endpoint.trust_level !== "local" &&
+            !parsed.allow_public_endpoint
+          ) {
+            throw new McpError(
+              "E_STATE_INVALID",
+              `endpoint '${endpoint.name}' resolved from config.defaults.review.endpoint has ` +
+                `trust_level='${endpoint.trust_level}'; either pass endpoint explicitly to ` +
+                `acknowledge the off-host route or set allow_public_endpoint=true`,
             );
           }
 
@@ -147,8 +167,16 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
           // and the most specific overlay available (family > trust-level >
           // base). The overlay is appended to the system prompt so its
           // calibration corrections are the last thing the model sees.
+          //
+          // Resolve against the prepared run-dir snapshot — NOT the live KB.
+          // review_prepare copies every `reviewer-<type>*.md` variant into
+          // the run dir so the overlay chosen here reflects the KB state AT
+          // PREPARE TIME, not whatever it's been edited to since. Keeps the
+          // prepare→execute contract honest: same run_id, same prompt,
+          // regardless of KB edits between the two calls.
           const overlay = await readOverlayBundle({
             kbRoot: deps.config.kb.root,
+            reviewersDir: runDir,
             reviewType: run.type as ReviewType,
             modelId,
             trustLevel: endpoint.trust_level,

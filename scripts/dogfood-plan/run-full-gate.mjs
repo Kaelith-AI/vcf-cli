@@ -144,11 +144,14 @@ async function main() {
       break;
     }
     process.stderr.write(`[${type} stage ${s} @${modelId}] ${r.verdict}\n`);
-    const hasNonInfo = Object.values(r.carry_forward ?? {}).some((arr) =>
-      Array.isArray(arr) && arr.some((e) => e.severity !== "info"),
-    );
-    if (!r.verdict.includes("PASS") || hasNonInfo) {
-      process.stderr.write(`[${type} stage ${s} @${modelId}] non-PASS or non-info finding — stopping\n`);
+    // Stop only on verdict. Non-info entries in carry_forward are the
+    // ACCEPTED-RISK mechanism — a PASS with carried warnings is a
+    // legitimate outcome ("we're moving forward; the residual stays
+    // visible to the next reviewer"). Early harness treated carry_forward
+    // non-info as a halt signal; that misread the protocol and caused
+    // PASS stages to abort the run.
+    if (!r.verdict.includes("PASS")) {
+      process.stderr.write(`[${type} stage ${s} @${modelId}] non-PASS — stopping\n`);
       break;
     }
   }

@@ -80,6 +80,13 @@ export interface ResolveOverlayOpts {
   reviewType: ReviewType;
   modelId: string;
   trustLevel: TrustLevel;
+  /**
+   * Optional override for the directory that actually holds the reviewer
+   * files. When set, replaces the default `<kbRoot>/reviewers` lookup.
+   * `review_execute` passes the run-dir snapshot so resolution reads only
+   * the prepared copies, not live KB — keeps prepared runs self-contained.
+   */
+  reviewersDir?: string;
 }
 
 export interface ResolvedOverlay {
@@ -97,12 +104,11 @@ export interface ResolvedOverlay {
 export function resolveOverlay(opts: ResolveOverlayOpts): ResolvedOverlay {
   const family = modelFamily(opts.modelId);
   const trustToken = trustLevelToken(opts.trustLevel);
-  const base = join(opts.kbRoot, "reviewers", `reviewer-${opts.reviewType}.md`);
-  const familyCandidate = family
-    ? join(opts.kbRoot, "reviewers", `reviewer-${opts.reviewType}.${family}.md`)
-    : null;
+  const dir = opts.reviewersDir ?? join(opts.kbRoot, "reviewers");
+  const base = join(dir, `reviewer-${opts.reviewType}.md`);
+  const familyCandidate = family ? join(dir, `reviewer-${opts.reviewType}.${family}.md`) : null;
   const trustCandidate = trustToken
-    ? join(opts.kbRoot, "reviewers", `reviewer-${opts.reviewType}.${trustToken}.md`)
+    ? join(dir, `reviewer-${opts.reviewType}.${trustToken}.md`)
     : null;
 
   if (familyCandidate && existsSync(familyCandidate)) {

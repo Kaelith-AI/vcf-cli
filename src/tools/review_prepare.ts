@@ -26,8 +26,8 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { mkdir, writeFile, copyFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, writeFile, copyFile, readdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { simpleGit } from "simple-git";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
@@ -288,19 +288,40 @@ async function copyReviewerFile(deps: ServerDeps, type: string, runDir: string):
       e.kind === "reviewer-config" &&
       (e.frontmatter["reviewer_type"] as string | undefined) === type,
   );
+  const base = join(runDir, `reviewer-${type}.md`);
   if (!reviewer) {
     // Not strictly required — return a stub file so the reviewer knows there's no overlay.
-    const stub = join(runDir, `reviewer-${type}.md`);
     await writeFile(
-      stub,
+      base,
       `# Reviewer Overlay (stub)\n\nNo kb/reviewers/reviewer-${type}.md found. Following the stage file verbatim.\n`,
       "utf8",
     );
-    return stub;
+    return base;
   }
-  const target = join(runDir, `reviewer-${type}.md`);
-  await copyFile(reviewer.path, target);
-  return target;
+  await copyFile(reviewer.path, base);
+
+  // Snapshot every per-model overlay (`reviewer-<type>.<variant>.md`) into the
+  // run dir alongside the base. The overlay chosen at execute time depends on
+  // model_id + endpoint.trust_level (neither known at prepare time), so
+  // resolution must still happen at execute — but it now resolves against the
+  // prepared snapshot, not live KB. Editing reviewer-code.local.md between
+  // prepare and execute no longer changes what the prepared run sees.
+  const reviewerDir = dirname(reviewer.path);
+  const variantPrefix = `reviewer-${type}.`;
+  const variantSuffix = ".md";
+  try {
+    const dirEntries = await readdir(reviewerDir);
+    for (const entry of dirEntries) {
+      if (!entry.startsWith(variantPrefix) || !entry.endsWith(variantSuffix)) continue;
+      if (entry === `reviewer-${type}.md`) continue; // base, already copied
+      await copyFile(join(reviewerDir, entry), join(runDir, entry));
+    }
+  } catch {
+    // Reviewer dir missing / unreadable is non-fatal: the base already copied
+    // above, and the overlay resolver falls back to base-only when no variant
+    // file exists in the snapshot.
+  }
+  return base;
 }
 
 async function selectLenses(

@@ -639,6 +639,7 @@ async function runNarrative(
 
 export async function runNarrativeCore(opts: RunNarrativeOpts): Promise<NarrativeResult> {
   const { config, parsed, report, mcpSignal } = opts;
+  const endpointFromDefaults = parsed.endpoint === undefined;
   const endpointName =
     parsed.endpoint ?? config.defaults?.lifecycle_report?.endpoint;
   if (!endpointName) {
@@ -654,10 +655,26 @@ export async function runNarrativeCore(opts: RunNarrativeOpts): Promise<Narrativ
       `endpoint '${endpointName}' not declared in config.endpoints`,
     );
   }
+  // Same defaults-resolution gate as review_execute: public trust always
+  // requires opt-in; silent defaults routing to any non-local endpoint also
+  // requires opt-in. Explicit endpoint arg (narrative mode's --frontier CLI
+  // or `endpoint: "..."` MCP arg) is the consent signal.
   if (endpoint.trust_level === "public" && !parsed.allow_public_endpoint) {
     throw new McpError(
       "E_STATE_INVALID",
       `endpoint '${endpoint.name}' has trust_level='public'; pass allow_public_endpoint=true to override`,
+    );
+  }
+  if (
+    endpointFromDefaults &&
+    endpoint.trust_level !== "local" &&
+    !parsed.allow_public_endpoint
+  ) {
+    throw new McpError(
+      "E_STATE_INVALID",
+      `endpoint '${endpoint.name}' resolved from config.defaults.lifecycle_report.endpoint has ` +
+        `trust_level='${endpoint.trust_level}'; either pass endpoint explicitly to ` +
+        `acknowledge the off-host route or set allow_public_endpoint=true`,
     );
   }
   const modelId =
