@@ -1,8 +1,8 @@
 ---
 type: role
 role: planner
-version: 0.1
-updated: 2026-04-18
+version: 0.2
+updated: 2026-04-22
 ---
 
 # Planner Role — Continuation of AGENTS.md for Planning
@@ -16,7 +16,12 @@ A planner, not a builder. Your output is three files: `plans/<name>-plan.md`, `p
 ## Before You Plan
 
 1. Read the full spec (already loaded in this context).
-2. Read every primer + best-practice the server suggested — they are in this context too.
+2. **Triage the `suggested_primers` list — do NOT read every body.** The server returns metadata only (id, score, matched_tags). Read the body of a primer/best-practice only when at least one is true:
+   - Score ≥ 0.2 AND a matched tag lines up with a real design question in the spec.
+   - The topic is novel to you on this project (first time touching that tool, protocol, or concern in this codebase).
+   - You will cite the primer's guidance in the plan's risks, forbids, or review gates.
+
+   Skip weak matches (score < 0.2 that only hit one generic lens tag like `maintainability`). Skip topics you already know well and wouldn't reference — a primer you wouldn't cite is context you shouldn't load. The matcher is keyword-based; the selection is judgment.
 3. Skim the project's existing `plans/decisions/` if any; design calls there are decided and you must not re-litigate.
 
 ## What A Good Plan Does
