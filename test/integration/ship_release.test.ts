@@ -141,6 +141,40 @@ describe("ship_release plan/confirm contract", () => {
     expect(env.code).toBe("E_CONFIRM_REQUIRED");
   });
 
+  it("failed release does NOT transition project.state away from 'shipping' (followup #25 guard)", async () => {
+    // Don't mock spawn — gh either isn't installed or isn't authed in the
+    // test env, so the child exits non-zero. That's exactly the path we
+    // want to exercise: passed=false ⇒ no state transition.
+    const { client } = await connectProject();
+    const projectDb = openProjectDb({ path: join(projectDir, ".vcf", "project.db") });
+
+    const first = parseResult(
+      await client.callTool({
+        name: "ship_release",
+        arguments: { tag: "v0.0.1-alpha.0", draft: true, expand: true },
+      }),
+    );
+    const token = (first.content as { confirm_token: string }).confirm_token;
+
+    await client.callTool({
+      name: "ship_release",
+      arguments: {
+        tag: "v0.0.1-alpha.0",
+        draft: true,
+        confirm_token: token,
+        timeout_ms: 2000,
+      },
+    });
+
+    // State stayed 'shipping' — the transition to 'shipped' is gated on
+    // gh exiting 0, which didn't happen. The positive-path transition is
+    // verified end-to-end by real releases (the 0.4 tag push is the test).
+    const row = projectDb.prepare("SELECT state FROM project WHERE id = 1").get() as {
+      state: string;
+    };
+    expect(row.state).toBe("shipping");
+  });
+
   it("reusing a token (even with matching input) is refused — single-use", async () => {
     const { client } = await connectProject();
     const first = parseResult(

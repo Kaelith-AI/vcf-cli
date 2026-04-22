@@ -42,7 +42,11 @@ import { CARRY_FORWARD_SECTIONS, type CarryForwardSection } from "../review/carr
 const ReviewExecuteInput = z
   .object({
     run_id: z.string().min(3).max(128),
-    endpoint: z.string().regex(/^[a-z][a-z0-9-]*$/),
+    endpoint: z
+      .string()
+      .regex(/^[a-z][a-z0-9-]*$/)
+      .optional()
+      .describe("endpoint name; falls back to config.defaults.review.endpoint when omitted"),
     model_id: z.string().min(1).max(128).optional(),
     timeout_ms: z
       .number()
@@ -93,12 +97,19 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
             throw new McpError("E_NOT_FOUND", `review run "${parsed.run_id}" does not exist`);
           }
 
-          // Endpoint + trust-level gate.
-          const endpoint = deps.config.endpoints.find((e) => e.name === parsed.endpoint);
+          // Endpoint resolution: explicit arg → config.defaults.review.endpoint.
+          const endpointName = parsed.endpoint ?? deps.config.defaults?.review?.endpoint;
+          if (!endpointName) {
+            throw new McpError(
+              "E_VALIDATION",
+              "endpoint not provided and config.defaults.review.endpoint is unset",
+            );
+          }
+          const endpoint = deps.config.endpoints.find((e) => e.name === endpointName);
           if (!endpoint) {
             throw new McpError(
               "E_VALIDATION",
-              `endpoint '${parsed.endpoint}' not in config.endpoints[]`,
+              `endpoint '${endpointName}' not in config.endpoints[]`,
             );
           }
           if (endpoint.trust_level === "public" && !parsed.allow_public_endpoint) {
@@ -140,7 +151,16 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
           const onAbort = (): void => ctrl.abort();
           mcpSignal?.addEventListener("abort", onAbort);
 
-          const modelId = parsed.model_id ?? pickModelId(deps, run.type);
+          const modelId =
+            parsed.model_id ?? deps.config.defaults?.review?.model ?? pickModelId(deps, run.type);
+          // Per-endpoint provider_options (config.yaml's endpoint block).
+          // Set to e.g. {num_ctx: 131072, num_predict: 8192} for Ollama
+          // endpoints so prompts aren't silently truncated at 2048 tokens
+          // (followup #34). Skipped when unset, so non-Ollama endpoints
+          // (OpenAI, OpenRouter, CLIProxyAPI) don't receive a body key they
+          // neither need nor validate — closes the security/stage-7 finding
+          // from the 2026-04-21 dogfood review.
+          const providerOptions = endpoint.provider_options as Record<string, unknown> | undefined;
           let content: string;
           try {
             content = await callChatCompletion({
@@ -150,6 +170,7 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
               messages: redactedMessages,
               temperature: 0.1,
               jsonResponse: true,
+              ...(providerOptions ? { providerOptions } : {}),
               signal: ctrl.signal,
             });
           } catch (e) {

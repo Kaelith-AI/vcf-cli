@@ -190,6 +190,17 @@ async function runInit(opts: { telemetry?: boolean } = {}): Promise<void> {
       "#   model: nomic-embed-text",
       "#   blend_weight: 0.5",
       "",
+      "# Optional: per-step model/endpoint defaults. Each entry overrides the",
+      "# legacy model_aliases fallback for one tool without forcing per-call args.",
+      "# Resolution order at call time: explicit arg → defaults.<tool> → legacy.",
+      "# defaults:",
+      "#   review: { endpoint: local-ollama, model: gemma-4-12b }",
+      "#   lifecycle_report: { endpoint: local-ollama, model: gemma-4-12b }",
+      "#   retrospective: { endpoint: local-ollama, model: gemma-4-12b }",
+      "#   research: { endpoint: local-ollama, model: gemma-4-12b }",
+      "#   research_verify: { endpoint: local-ollama, model: gemma-4-12b }",
+      "#   stress_test: { endpoint: local-ollama, model: gemma-4-12b }",
+      "",
     ].join("\n");
     await writeFile(cfgPath, seed, "utf8");
     log(`wrote ${cfgPath}`);
@@ -775,6 +786,116 @@ async function runPackRemove(name: string): Promise<void> {
 // registers new projects; these commands cover pre-existing projects
 // and explicit deregistration. Operates against the global DB only —
 // the authoritative per-project state lives in each project.db.
+
+async function runAdopt(opts: { path: string; name?: string; state?: string }): Promise<void> {
+  const { basename } = await import("node:path");
+  const { openGlobalDb } = await import("./db/global.js");
+  const { upsertProject } = await import("./util/projectRegistry.js");
+  const { openProjectDb } = await import("./db/project.js");
+  const { slugify } = await import("./util/slug.js");
+  const { assertInsideAllowedRoot } = await import("./util/paths.js");
+
+  const absRoot = resolvePath(opts.path);
+  if (!existsSync(absRoot)) {
+    err(`path does not exist: ${absRoot}`, 2);
+  }
+  const st = statSync(absRoot);
+  if (!st.isDirectory()) {
+    err(`path is not a directory: ${absRoot}`, 2);
+  }
+
+  // Mirror the MCP tool's allowed_roots check so the CLI surface has the same
+  // blast-radius guarantee. If config is present but fails to load (parse /
+  // validation errors), refuse — a malformed config silently disabling the
+  // safety check is exactly the failure mode followup-review/code-8 +
+  // security-1 flagged. The only tolerated case is "config does not exist"
+  // (pre-init), detected explicitly via existsSync before any load attempt.
+  const configPath = DEFAULT_CONFIG_PATH();
+  if (existsSync(configPath)) {
+    try {
+      const config = await loadConfig(configPath);
+      await assertInsideAllowedRoot(absRoot, config.workspace.allowed_roots);
+    } catch (e) {
+      const kind = (e as { code?: string } | undefined)?.code;
+      if (kind === "E_SCOPE_DENIED") {
+        err(`path ${absRoot} is outside workspace.allowed_roots — edit ${configPath} to add it`, 2);
+      }
+      err(
+        `config at ${configPath} exists but failed to load (${(e as Error).message}) — fix it and retry`,
+        2,
+      );
+    }
+  }
+
+  const allowedStates = new Set([
+    "draft",
+    "planning",
+    "building",
+    "testing",
+    "reviewing",
+    "shipping",
+    "shipped",
+  ]);
+  const state = opts.state ?? "reviewing";
+  if (!allowedStates.has(state)) {
+    err(`invalid --state ${state} (allowed: ${Array.from(allowedStates).join(",")})`, 2);
+  }
+
+  // Cross-platform basename — `split("/").pop()` was POSIX-only and returned
+  // the whole string on Windows (`C:\work\repo` → `C:\work\repo`).
+  const name = opts.name ?? (basename(absRoot) || "project");
+  const projectSlug = slugify(name);
+
+  await mkdir(join(absRoot, ".vcf"), { recursive: true });
+  const dbPath = join(absRoot, ".vcf", "project.db");
+  const freshDb = !existsSync(dbPath);
+  const pdb = openProjectDb({ path: dbPath });
+  const now = Date.now();
+  const existing = pdb.prepare("SELECT id, name, state FROM project WHERE id = 1").get() as
+    | { id: number; name: string; state: string }
+    | undefined;
+
+  if (existing) {
+    pdb
+      .prepare(`UPDATE project SET adopted = 1, updated_at = ?, root_path = ? WHERE id = 1`)
+      .run(now, absRoot);
+  } else {
+    pdb
+      .prepare(
+        `INSERT INTO project (id, name, root_path, state, created_at, updated_at, spec_path, adopted)
+       VALUES (1, ?, ?, ?, ?, ?, NULL, 1)`,
+      )
+      .run(name, absRoot, state, now, now);
+  }
+  pdb.close();
+
+  // Registry write is advisory — if it fails, the local project.db is still
+  // authoritative and re-running `vcf adopt` heals the registry. Match the
+  // MCP tool's non-fatal pattern so the CLI doesn't confuse operators with
+  // a "failed" exit for a best-effort side-effect.
+  const globalDb = openGlobalDb({ path: resolvePath(homedir(), ".vcf", "vcf.db") });
+  let registryWarning: string | null = null;
+  try {
+    upsertProject(globalDb, {
+      name: projectSlug,
+      root_path: absRoot,
+      state: existing?.state ?? state,
+    });
+  } catch (e) {
+    registryWarning = `global registry update failed (${(e as Error).message}) — local project.db is adopted; re-run 'vcf adopt' to heal the registry`;
+  } finally {
+    globalDb.close();
+  }
+
+  if (existing) {
+    log(`re-adopted project '${existing.name}' at ${absRoot} (state=${existing.state} preserved)`);
+  } else {
+    log(`adopted project '${name}' at ${absRoot} (state=${state}, fresh project.db=${freshDb})`);
+    log(`  registered in global registry as '${projectSlug}'`);
+    log(`  next: run reviews with 'vcf-mcp' in ${absRoot} or start a project-scope MCP session`);
+  }
+  if (registryWarning) log(`warning: ${registryWarning}`);
+}
 
 async function runProjectRegister(opts: { path: string; name?: string }): Promise<void> {
   const { openGlobalDb } = await import("./db/global.js");
@@ -1647,6 +1768,29 @@ project
   .action(async () => {
     try {
       await runProjectRefresh();
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+program
+  .command("adopt")
+  .description(
+    "Adopt an existing project directory into VCF tracking (followup #20, bypass mode). Creates .vcf/project.db + registry row without scaffolding docs/plans. Use when you want to run review or portfolio tools against a project not born in VCF.",
+  )
+  .argument("<path>", "absolute path to the existing project directory")
+  .option("--name <name>", "human-readable project name (defaults to the directory basename)")
+  .option(
+    "--state <state>",
+    "initial project.state (default: reviewing; one of draft|planning|building|testing|reviewing|shipping|shipped)",
+  )
+  .action(async (path: string, opts: { name?: string; state?: string }) => {
+    try {
+      await runAdopt({
+        path,
+        ...(opts.name !== undefined ? { name: opts.name } : {}),
+        ...(opts.state !== undefined ? { state: opts.state } : {}),
+      });
     } catch (e) {
       err((e as Error).message);
     }

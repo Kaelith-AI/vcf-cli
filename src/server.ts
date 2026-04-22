@@ -25,6 +25,7 @@ import { registerIdeaCapture } from "./tools/idea_capture.js";
 import { registerIdeaSearch } from "./tools/idea_search.js";
 import { registerIdeaGet } from "./tools/idea_get.js";
 import { registerProjectInit } from "./tools/project_init.js";
+import { registerProjectInitExisting } from "./tools/project_init_existing.js";
 import { registerPortfolioStatus } from "./tools/portfolio_status.js";
 import { registerSpecTemplate } from "./tools/spec_template.js";
 import { registerSpecSave } from "./tools/spec_save.js";
@@ -157,6 +158,7 @@ export function createServer(deps: ServerDeps): McpServer {
     registerSpecSuggestPrimers(server, deps);
     // Project bootstrap
     registerProjectInit(server, deps);
+    registerProjectInitExisting(server, deps);
   } else {
     // Project scope owns the full lifecycle.
     registerPortfolioStatus(server, deps);

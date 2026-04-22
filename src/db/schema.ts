@@ -194,4 +194,15 @@ export const PROJECT_MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    name: "project_adoption_flag",
+    up: `
+      -- adopted = 1 marks projects brought into VCF via project_init_existing
+      -- (followup #20, bypass mode). Informational: signals partial provenance
+      -- to auditors and enables future strict/reconstruct modes to drive the
+      -- correct reconstruction flow. 0 for projects scaffolded by project_init.
+      ALTER TABLE project ADD COLUMN adopted INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];

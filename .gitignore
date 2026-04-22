@@ -8,3 +8,10 @@ coverage
 !.env.example
 .vitest-cache
 .tsbuildinfo
+# Per-project local state + disposable review workspaces (vcf-cli
+# dogfooded itself; these files hold its own project.db + run artifacts)
+.vcf/
+.review-runs/
+# Stress-harness-generated reports — keep the scripts, skip the runs
+scripts/stress/*/report-*.json
+scripts/stress/*/report-*.md

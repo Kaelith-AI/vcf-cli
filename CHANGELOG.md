@@ -4,6 +4,89 @@ All notable changes to `@kaelith-labs/cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). MCP spec compatibility and SDK version pin are called out per release.
 
+## Unreleased
+
+Pre-testing prep for the 0.4 dogfood: lets VCF be run against an
+already-existing project (including vcf-cli itself) and removes per-call
+endpoint/model arguments by routing through `config.yaml`.
+
+### Added
+
+- **`project_init_existing` tool + `vcf adopt` CLI** (followup #20, bypass
+  mode). Adopts a pre-existing project directory into VCF tracking without
+  scaffolding AGENTS.md/CLAUDE.md/plans/git-hooks. Creates `.vcf/project.db`
+  with `adopted=1`, registers in the global registry, defaults
+  `project.state` to `reviewing` (the typical reason to adopt). Idempotent
+  re-adoption preserves existing state + name. `strict` and `reconstruct`
+  modes are reserved for future releases.
+- **Per-step model/endpoint defaults** (`config.defaults`, followup #28).
+  New optional block in `config.yaml` lets operators set default
+  endpoint+model per tool (`review`, `lifecycle_report`, `retrospective`,
+  `research`, `research_verify`, `stress_test`). `review_execute` now resolves
+  endpoint via explicit arg → `defaults.review.endpoint` → E_VALIDATION, and
+  resolves model via explicit arg → `defaults.review.model` → legacy
+  `model_aliases` fallback. `vcf init` documents the block with a commented
+  starter example.
+
+### Fixed
+
+- **`templatesDir()` resolved to the wrong directory in published installs**
+  (followup #31). The hard-coded `../../templates` walk worked in dev (where
+  `src/util/templates.ts` lives two levels deep) but missed in production —
+  `tsup` bundles everything into a flat `dist/` so the built file is only
+  one level from the package root. Every install of 0.3.0–0.3.2 therefore
+  saw `spec_template` (and any other template-dependent tool) fail with
+  `ENOENT`. Replaced with a walk-up that stops at the first `package.json`
+  so both dev and bundled layouts resolve correctly. The 229 existing tests
+  didn't catch this because they run against source, never the bundled
+  artifact; packaging smokes didn't catch it because they don't call
+  `spec_template`. Surfaced by the spec stress harness
+  (`scripts/stress/spec/`) on first run. Smoke-test coverage for the tool
+  is filed in followup #31 as a regression guard.
+
+- **`ship_release` now transitions `project.state` to `shipped`** on a
+  successful release (closes the ship item from followup #25). Portfolio
+  queries can finally distinguish shipped projects from projects still in
+  `reviewing`. Global registry `state_cache` is mirrored at the same time.
+  Transition is gated on `gh` exiting 0 — failed releases leave the state
+  unchanged.
+
+### Schema
+
+- Project DB migration v2: adds `adopted INTEGER NOT NULL DEFAULT 0` to the
+  `project` table. Existing project.dbs auto-migrate on next open; no
+  operator action required.
+  - **Rollback:** SQLite 3.35+ supports `ALTER TABLE project DROP COLUMN
+    adopted` — run that against the `.vcf/project.db` file(s) after
+    downgrading the vcf-cli package if an operator needs to return to a
+    0.3.2-era database. Alternatively, restore `project.db` and
+    `~/.vcf/vcf.db` from backup (both are plain SQLite files, safe to copy
+    with `cp` when vcf-mcp is not running). No down-migration ships with
+    the tool — the schema change is additive, so a forward-only path is
+    the norm for a developer CLI.
+
+### Review KB updates (shipped with `@kaelith-labs/kb`)
+
+- **Reviewer overlays bumped to v0.2** (`kb/reviewers/reviewer-{code,security,production}.md`).
+  First dual-model dogfood review against vcf-cli surfaced three calibration
+  gaps: frontier models defaulted to `NEEDS_WORK` on every stage regardless
+  of diff quality; local models interpreted the server's outbound redaction
+  markers as committed secrets; production review demanded service-grade
+  runbooks/SLOs/on-call rotations for a developer CLI tool. All three
+  overlays now carry explicit verdict-calibration rules ("empty findings on
+  PASS is correct; do not manufacture nits; severity drives verdict, not
+  finding count") and evidence-discipline rules ("redaction markers are not
+  committed secrets"; "cite file:line for every finding"). The production
+  overlay gains an artifact-class gate so service-grade checks don't run
+  against CLI/library/tool projects.
+
+### MCP compatibility
+
+- MCP spec `2025-11-25`. `@modelcontextprotocol/sdk ^1.29`. Node `>=22.13`.
+- **31 → 32 MCP tools** (`project_init_existing` added).
+
+---
+
 ## [0.3.2] — 2026-04-21
 
 **KB auto-seed on `vcf init`.** Closes followup #5: every fresh install now

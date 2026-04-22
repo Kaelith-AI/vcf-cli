@@ -35,6 +35,19 @@ export interface ChatCompletionRequest {
   /** Optional request-response JSON mode hint. Providers that don't honor
    *  it silently ignore, which is fine — we validate on parse. */
   jsonResponse?: boolean;
+  /**
+   * Provider-specific options merged into the request body as `options`.
+   * Primary use case: Ollama's OpenAI-compatible endpoint accepts `num_ctx`,
+   * `num_predict`, etc. here. Non-Ollama providers ignore unknown top-level
+   * keys (verified against OpenAI, OpenRouter, CLIProxyAPI — all tolerate
+   * an extra `options` object without rejecting the request).
+   *
+   * Critical motivator (followup #34): Ollama silently caps `num_ctx` at
+   * 2048 when absent, regardless of the model's native context. Passing
+   * `{num_ctx: 131072}` unlocks Gemma 4's full 256K for review tasks that
+   * previously saw only the first ~2K tokens of the prompt.
+   */
+  providerOptions?: Record<string, unknown>;
   /** Injected fetch for tests. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -74,6 +87,9 @@ export async function callChatCompletion(req: ChatCompletionRequest): Promise<st
   };
   if (req.jsonResponse) {
     body.response_format = { type: "json_object" };
+  }
+  if (req.providerOptions && Object.keys(req.providerOptions).length > 0) {
+    body.options = req.providerOptions;
   }
 
   const fetchFn = req.fetchImpl ?? fetch;

@@ -80,6 +80,14 @@ export const EndpointSchema = z
       .regex(/^[A-Z_][A-Z0-9_]*$/, "env var names must be SCREAMING_SNAKE_CASE")
       .optional(),
     trust_level: EndpointTrustSchema,
+    // Provider-specific options merged into chat-completion request bodies as
+    // `options`. Scoped per-endpoint so unknown keys don't get fanned out to
+    // providers that might flag them (the OpenAI surface tolerates unknown
+    // body keys, but explicit is better). Primary use: Ollama's `num_ctx` /
+    // `num_predict` (native default caps context at 2048 — set 131072+ to
+    // unlock the model's full window). Followup #34 + review finding
+    // security/stage-7 calibration.
+    provider_options: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 
@@ -199,6 +207,38 @@ export const AuditSchema = z
   })
   .strict();
 
+// ---- Per-step defaults (followup #28) --------------------------------------
+//
+// Each entry points an endpoint-calling tool at an endpoint + model without
+// requiring per-call overrides. Resolution order at tool call time:
+//   explicit arg → defaults.<tool>.<field> → tool-specific legacy fallback.
+// Both fields optional per tool, so an operator can set just the endpoint and
+// leave model selection to the legacy `model_aliases` flow if they prefer.
+//
+// `endpoint` must reference a declared endpoint; cross-reference is enforced
+// in the top-level superRefine so a typo fails at config load, not on first
+// tool call.
+
+const DefaultEntrySchema = z
+  .object({
+    endpoint: SlugSchema.optional(),
+    model: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
+export const DefaultsSchema = z
+  .object({
+    review: DefaultEntrySchema.optional(),
+    lifecycle_report: DefaultEntrySchema.optional(),
+    retrospective: DefaultEntrySchema.optional(),
+    research: DefaultEntrySchema.optional(),
+    research_verify: DefaultEntrySchema.optional(),
+    stress_test: DefaultEntrySchema.optional(),
+  })
+  .strict();
+
+export type Defaults = z.infer<typeof DefaultsSchema>;
+
 // ---- Embeddings (optional; off by default) ---------------------------------
 
 export const EmbeddingsSchema = z
@@ -247,6 +287,7 @@ export const ConfigSchema = z
     telemetry: TelemetrySchema.default({ error_reporting_enabled: false }),
     audit: AuditSchema.default({ full_payload_storage: false }),
     embeddings: EmbeddingsSchema.optional(),
+    defaults: DefaultsSchema.optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {
@@ -268,6 +309,18 @@ export const ConfigSchema = z
         path: ["embeddings", "endpoint"],
         message: `endpoint "${cfg.embeddings.endpoint}" is not declared in endpoints[]`,
       });
+    }
+    // defaults.<tool>.endpoint — when set, must reference a declared endpoint.
+    if (cfg.defaults) {
+      for (const [tool, entry] of Object.entries(cfg.defaults)) {
+        if (entry?.endpoint && !endpointNames.has(entry.endpoint)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["defaults", tool, "endpoint"],
+            message: `endpoint "${entry.endpoint}" is not declared in endpoints[]`,
+          });
+        }
+      }
     }
     // Endpoint names must be unique.
     const endpointDuplicates = new Set<string>();

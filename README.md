@@ -76,6 +76,47 @@ Claude's `spec-idea` skill runs `spec_template(project_name, idea_ref)`, fills t
 
 `project_init` scaffolds the dir: AGENTS.md / CLAUDE.md / TOOLS.md / MEMORY.md / README.md / CHANGELOG.md (from templates) + plans/ memory/ docs/ skills/ backups/ subdirs + `.vcf/project.db` + `.mcp.json` (auto-wiring `--scope project` for the next session) + `git init` with `post-commit` (daily-log append) and `pre-push` (gitleaks + uncommitted artifact warning) hooks.
 
+#### Adopting an existing project (`vcf adopt`)
+
+If a project already exists on disk (built before VCF, or pulled from a
+teammate) and you want to run the review / portfolio surface against it
+without re-scaffolding every lifecycle artifact, use `vcf adopt`:
+
+```bash
+vcf adopt /path/to/existing-project
+vcf adopt /path/to/existing-project --name "Legacy App" --state draft
+```
+
+What this does (bypass mode — the only mode shipped today; `strict` /
+`reconstruct` are reserved):
+
+- Creates `<project>/.vcf/project.db` with `adopted = 1`, defaulting
+  `project.state` to `reviewing` (override with `--state`).
+- Writes a registry entry to `~/.vcf/vcf.db` so `vcf project list` and
+  portfolio tools see the project.
+- Does **not** scaffold AGENTS.md / CLAUDE.md / plans / git hooks.
+  Review, audit, and portfolio tools run fine without them; if you
+  want the full scaffold run `vcf init` instead.
+
+Key behaviors to know:
+
+- **Idempotent re-adoption.** Running `vcf adopt` a second time on the
+  same path updates `adopted = 1` + the updated_at timestamp but
+  **preserves the existing `state` and `name`** — safe to re-run after a
+  half-finished adoption or if you're unsure whether a path was already
+  adopted. `--state` is only honored on a fresh adoption.
+- **`allowed_roots` enforcement, with a precise escape hatch.** If
+  `~/.vcf/config.yaml` exists, the adopt target must live inside one of
+  `workspace.allowed_roots`. If the config is absent (pre-init), adopt
+  proceeds without the check — so your very first `vcf adopt` doesn't
+  require an earlier `vcf init`. If the config exists but fails to
+  load (parse or schema error), adopt **refuses** rather than silently
+  skip the safety boundary; fix the config and retry.
+- **Global-registry failure is non-fatal + self-healing.** If the
+  `~/.vcf/vcf.db` write fails (permission hiccup, disk full, etc.),
+  the local `project.db` is still authoritative and a warning is
+  printed. Re-running `vcf adopt` heals the registry.
+
 ### 4. Plan inside the project
 
 Open a new MCP client session in the project directory. The project's `.mcp.json` loads `vcf-mcp --scope project` automatically.
@@ -155,6 +196,62 @@ vcf admin audit --format json --full     # include redacted inputs/outputs JSON
 ```
 
 These are intentionally not MCP tools. Deterministic maintenance that a human or CI runs should be a CLI command, not a tool that burns tokens on every LLM turn.
+
+### Configuring review defaults + provider options
+
+`~/.vcf/config.yaml` accepts two related blocks for routing endpoint-using
+tools (currently just `review_execute`; forward-compat for `lifecycle_report`
+/ `retrospective` / `research` when they ship):
+
+```yaml
+# Per-endpoint knobs merged into the outbound request body as `options`.
+# Required for Ollama: Ollama silently caps context at 2048 tokens when
+# `num_ctx` is unset, regardless of the model's native window. Set high
+# enough for your longest review prompt (stage file + reviewer overlay +
+# diff + carry-forward).
+endpoints:
+  - name: local-ollama
+    provider: openai-compatible
+    base_url: http://127.0.0.1:11434/v1
+    trust_level: local
+    provider_options:
+      num_ctx: 131072      # unlock Gemma / qwen3-coder's full context
+      num_predict: 8192    # room for a full structured-verdict response
+
+# Per-tool defaults. Each entry makes `endpoint` + `model` implicit so
+# tool calls don't have to re-name them. Resolution order at call time:
+#   explicit arg  →  defaults.<tool>  →  legacy (model_aliases for review)
+# Missing defaults + missing arg → E_VALIDATION (fail loud, not silent).
+defaults:
+  review: { endpoint: local-ollama, model: "qwen3-coder:30b" }
+```
+
+**Data-routing security note.** `review_execute` sends the full prompt bundle
+(stage file + reviewer overlay + scoped diff + decision/response log
+snapshots + carry-forward manifest) to whichever endpoint is resolved — via
+explicit arg OR the `defaults.review` block above. Set `defaults.review`
+pointing at a **`trust_level: local`** endpoint (e.g. your on-host Ollama)
+for sensitive/regulated codebases. Endpoints that proxy to a third-party
+provider retain your review context per that provider's retention policy
+even when declared `trust_level: local` in config; VCF's trust taxonomy
+classifies on *reachability* (is the proxy on this host?), not on
+*data residency* (does the proxy forward payloads off-host?). When in
+doubt, pass `endpoint` + `model_id` explicitly so a config change can't
+silently reroute a sensitive review to a new backend.
+
+**Troubleshooting**:
+
+- _"review_execute returned E_VALIDATION: endpoint not provided and
+  config.defaults.review.endpoint is unset"_ — either pass `endpoint`
+  explicitly to the tool, or add `defaults.review.endpoint` pointing at a
+  declared endpoint.
+- _Verdicts feel shallow / reviewer keeps saying "I don't see the
+  diff"_ — Ollama is probably truncating. Add the `provider_options`
+  block above to the Ollama endpoint; a rerun should show much more
+  specific findings.
+- _Reviews keep going to GPT when you set a local default_ — the tool
+  argument wins over the default. Omit the `endpoint` and `model_id`
+  args (or set them to match the default) if the caller is pinning them.
 
 ### Scheduled automation
 

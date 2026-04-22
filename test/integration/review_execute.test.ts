@@ -91,7 +91,11 @@ describe("review_execute (server-side LLM review)", () => {
     await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
   });
 
-  function makeConfig(extraEndpoints: unknown[] = []) {
+  function makeConfig(
+    extraEndpoints: unknown[] = [],
+    defaults?: Record<string, unknown>,
+    ollamaOptions?: Record<string, unknown>,
+  ) {
     return ConfigSchema.parse({
       version: 1,
       workspace: {
@@ -105,10 +109,12 @@ describe("review_execute (server-side LLM review)", () => {
           provider: "openai-compatible",
           base_url: "http://127.0.0.1:11434/v1",
           trust_level: "local",
+          ...(ollamaOptions ? { provider_options: ollamaOptions } : {}),
         },
         ...extraEndpoints,
       ],
       kb: { root: kbRoot },
+      ...(defaults ? { defaults } : {}),
     });
   }
 
@@ -323,5 +329,156 @@ describe("review_execute (server-side LLM review)", () => {
     );
     expect(env.ok).toBe(false);
     expect(env.code).toBe("E_NOT_FOUND");
+  });
+
+  it("falls back to config.defaults.review when endpoint/model omitted (followup #28)", async () => {
+    const config = makeConfig([], {
+      review: { endpoint: "local-ollama", model: "gemma-4-12b" },
+    });
+    const { client } = await connectProject(config);
+    const runId = await prepareRun(client);
+
+    vi.stubGlobal(
+      "fetch",
+      makeFetchStub({
+        verdict: "PASS",
+        summary: "default-routed review executed cleanly.",
+        findings: [],
+        carry_forward: [],
+      }),
+    );
+
+    const env = parseResult(
+      await client.callTool({
+        name: "review_execute",
+        arguments: { run_id: runId, expand: true },
+      }),
+    );
+    expect(env.ok).toBe(true);
+    const c = env.content as { endpoint: string; model_id: string };
+    expect(c.endpoint).toBe("local-ollama");
+    expect(c.model_id).toBe("gemma-4-12b");
+  });
+
+  it("explicit args win over defaults.review (followup #28)", async () => {
+    const config = makeConfig([], {
+      review: { endpoint: "local-ollama", model: "gemma-4-12b" },
+    });
+    const { client } = await connectProject(config);
+    const runId = await prepareRun(client);
+
+    vi.stubGlobal(
+      "fetch",
+      makeFetchStub({
+        verdict: "PASS",
+        summary: "explicit override honored.",
+        findings: [],
+        carry_forward: [],
+      }),
+    );
+
+    const env = parseResult(
+      await client.callTool({
+        name: "review_execute",
+        arguments: { run_id: runId, model_id: "gpt-5-mini", expand: true },
+      }),
+    );
+    expect(env.ok).toBe(true);
+    const c = env.content as { endpoint: string; model_id: string };
+    expect(c.endpoint).toBe("local-ollama");
+    expect(c.model_id).toBe("gpt-5-mini");
+  });
+
+  it("passes endpoint.provider_options through as body.options (followup #34 + scoped per-endpoint)", async () => {
+    const config = makeConfig([], undefined, { num_ctx: 131_072, num_predict: 8_192 });
+    const { client } = await connectProject(config);
+    const runId = await prepareRun(client);
+
+    const seenBodies: string[] = [];
+    vi.stubGlobal("fetch", (async (_url: unknown, init?: RequestInit): Promise<Response> => {
+      if (init?.body !== undefined) seenBodies.push(String(init.body));
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  verdict: "PASS",
+                  summary: "outgoing body inspected",
+                  findings: [],
+                  carry_forward: [],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch);
+
+    const env = parseResult(
+      await client.callTool({
+        name: "review_execute",
+        arguments: { run_id: runId, endpoint: "local-ollama", model_id: "gemma4:31b" },
+      }),
+    );
+    expect(env.ok).toBe(true);
+    expect(seenBodies.length).toBeGreaterThan(0);
+    const parsedBody = JSON.parse(seenBodies[0]!);
+    expect(parsedBody.options).toBeDefined();
+    expect(parsedBody.options.num_ctx).toBe(131_072);
+    expect(parsedBody.options.num_predict).toBe(8_192);
+  });
+
+  it("omits body.options entirely when endpoint has no provider_options (scope fix for security/stage-7)", async () => {
+    // Default makeConfig() — no provider_options on local-ollama.
+    const { client } = await connectProject();
+    const runId = await prepareRun(client);
+
+    const seenBodies: string[] = [];
+    vi.stubGlobal("fetch", (async (_url: unknown, init?: RequestInit): Promise<Response> => {
+      if (init?.body !== undefined) seenBodies.push(String(init.body));
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  verdict: "PASS",
+                  summary: "no options in body expected",
+                  findings: [],
+                  carry_forward: [],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch);
+
+    const env = parseResult(
+      await client.callTool({
+        name: "review_execute",
+        arguments: { run_id: runId, endpoint: "local-ollama", model_id: "gemma4:31b" },
+      }),
+    );
+    expect(env.ok).toBe(true);
+    const parsedBody = JSON.parse(seenBodies[0]!);
+    expect(parsedBody.options).toBeUndefined();
+  });
+
+  it("fails E_VALIDATION when endpoint is omitted and no default is set", async () => {
+    const { client } = await connectProject();
+    const runId = await prepareRun(client);
+
+    const env = parseResult(
+      await client.callTool({
+        name: "review_execute",
+        arguments: { run_id: runId },
+      }),
+    );
+    expect(env.ok).toBe(false);
+    expect(env.code).toBe("E_VALIDATION");
   });
 });

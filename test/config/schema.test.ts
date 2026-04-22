@@ -153,4 +153,45 @@ describe("ConfigSchema", () => {
     };
     expect(ConfigSchema.safeParse(bad).success).toBe(false);
   });
+
+  it("accepts a defaults block pointing at a declared endpoint (followup #28)", () => {
+    const withDefaults = {
+      ...MIN_VALID,
+      defaults: {
+        review: { endpoint: "local-ollama", model: "gemma-4-12b" },
+        lifecycle_report: { model: "gemma-4-4b" },
+      },
+    };
+    const parsed = ConfigSchema.parse(withDefaults);
+    expect(parsed.defaults?.review?.endpoint).toBe("local-ollama");
+    expect(parsed.defaults?.review?.model).toBe("gemma-4-12b");
+    expect(parsed.defaults?.lifecycle_report?.model).toBe("gemma-4-4b");
+    expect(parsed.defaults?.lifecycle_report?.endpoint).toBeUndefined();
+  });
+
+  it("rejects defaults.<tool>.endpoint that references an unknown endpoint", () => {
+    const bad = {
+      ...MIN_VALID,
+      defaults: {
+        review: { endpoint: "nonexistent", model: "gemma-4-12b" },
+      },
+    };
+    const r = ConfigSchema.safeParse(bad);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.join(".") === "defaults.review.endpoint")).toBe(
+        true,
+      );
+    }
+  });
+
+  it("rejects unknown keys in the defaults block (strict)", () => {
+    const bad = {
+      ...MIN_VALID,
+      defaults: {
+        not_a_tool: { endpoint: "local-ollama", model: "x" },
+      },
+    };
+    expect(ConfigSchema.safeParse(bad).success).toBe(false);
+  });
 });

@@ -19,12 +19,27 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { spawn } from "node:child_process";
+import { spawn as realSpawn, type SpawnOptions, type ChildProcess } from "node:child_process";
 import type { ServerDeps } from "../server.js";
+
+// Indirection so the positive-path integration test can stub gh without
+// hitting a real install. vi.mock on `node:child_process` can't override
+// across test files when `isolate: false` is set in vitest.config.ts
+// (the module cache is shared), so we expose a small setter/resetter
+// instead. Production always runs with the real spawn.
+type SpawnFn = (command: string, args?: readonly string[], options?: SpawnOptions) => ChildProcess;
+let spawnImpl: SpawnFn = realSpawn as SpawnFn;
+export function __setShipReleaseSpawnImpl(impl: SpawnFn): void {
+  spawnImpl = impl;
+}
+export function __resetShipReleaseSpawnImpl(): void {
+  spawnImpl = realSpawn as SpawnFn;
+}
 import { runTool, success } from "../envelope.js";
-import { writeAudit } from "../util/audit.js";
+import { writeAudit, redact } from "../util/audit.js";
 import { McpError } from "../errors.js";
 import { createConfirmTokenStore, type ConfirmTokenStore } from "../util/confirmToken.js";
+import { setProjectState } from "../util/projectRegistry.js";
 
 // One store per server process — tokens evaporate on restart, which is
 // the intended behavior (a new process = new key = invalidate outstanding
@@ -163,7 +178,7 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
             let stdoutBuf = "";
             let stderrBuf = "";
             let settled = false;
-            const child = spawn(cmd.command, cmd.args, {
+            const child = spawnImpl(cmd.command, cmd.args, {
               cwd: projectRoot,
               stdio: ["ignore", "pipe", "pipe"],
             });
@@ -185,11 +200,14 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
                 timed_out: true,
               });
             }, parsed.timeout_ms);
-            child.stdout.on("data", (c: Buffer) => {
+            // stdio: "pipe" guarantees these streams exist at runtime, but
+            // the SpawnFn type only promises `Readable | null`. Non-null
+            // assert since the nullable branch is unreachable here.
+            child.stdout!.on("data", (c: Buffer) => {
               stdoutBuf += c.toString("utf8");
               if (stdoutBuf.length > TAIL) stdoutBuf = stdoutBuf.slice(stdoutBuf.length - TAIL);
             });
-            child.stderr.on("data", (c: Buffer) => {
+            child.stderr!.on("data", (c: Buffer) => {
               stderrBuf += c.toString("utf8");
               if (stderrBuf.length > TAIL) stderrBuf = stderrBuf.slice(stderrBuf.length - TAIL);
             });
@@ -225,6 +243,20 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
             ? `ship_release: ${parsed.tag} created (${result.duration_ms}ms).`
             : `ship_release: gh exited ${result.exit_code ?? "null"} — release NOT created.`;
 
+          // Run stdout/stderr through the secret redactor before surfacing
+          // them in the envelope or the audit row. `gh` output can include
+          // repo URLs, commit SHAs, occasional API-key shaped strings in
+          // error messages; the redactor is the same pass that scrubs
+          // outbound LLM payloads. Closes the security/stage-7 finding
+          // from the 2026-04-21 dogfood review.
+          const stdoutRedacted = redact(result.stdout_tail) as string;
+          const stderrRedacted = redact(result.stderr_tail) as string;
+          const resultSafe = {
+            ...result,
+            stdout_tail: stdoutRedacted,
+            stderr_tail: stderrRedacted,
+          };
+
           // Record as a build row so portfolio_status picks it up.
           deps.projectDb
             .prepare(
@@ -239,13 +271,31 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
               null,
             );
 
+          // Close followup #25 ship item: on a successful release, transition
+          // project.state to 'shipped' so portfolio queries can distinguish
+          // shipped from reviewing. Mirror into the global registry cache.
+          if (passed) {
+            const now = Date.now();
+            deps.projectDb
+              .prepare("UPDATE project SET state = 'shipped', updated_at = ? WHERE id = 1")
+              .run(now);
+            try {
+              setProjectState(deps.globalDb, projectRoot, "shipped");
+            } catch {
+              /* non-fatal — registry is a convenience */
+            }
+          }
+
           const payload = success<unknown>(
             [projectRoot],
             summary,
-            parsed.expand ? { content: result } : {},
+            parsed.expand ? { content: resultSafe } : {},
           );
           auditBundle = {
-            content: { ...result, stdout_tail: "<redacted>", stderr_tail: "<redacted>" },
+            // Tails go into audit already-redacted (via resultSafe). The
+            // previous `<redacted>` placeholder lost the signal entirely; now
+            // operators can read sanitized output post-hoc.
+            content: resultSafe,
             result_code: passed ? "ok" : "E_INTERNAL",
           };
           return payload;
