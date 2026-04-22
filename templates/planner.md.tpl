@@ -1,7 +1,7 @@
 ---
 type: role
 role: planner
-version: 0.2
+version: 0.3
 updated: 2026-04-22
 ---
 
@@ -31,7 +31,7 @@ A planner, not a builder. Your output is three files: `plans/<name>-plan.md`, `p
 - **Phases, not a flat todo.** Each phase ends at a review gate or a compaction boundary.
 - **Names compaction points.** Where does the builder hand off to a fresh session? What artifacts does the next session read?
 - **Names builder-type swaps.** Backend → frontend → infra hand-offs, with the best-practice docs each swap loads.
-- **Names the review gates.** When does Stage 1 (fake-complete) fire? When does security review fire? When does production review fire?
+- **Names the review gates.** Default = full 9-stage run per review type. Write the gate as `code + security` or `code + production` — the stage range is always `1–9` unless the plan *explicitly* scopes it down with a written reason (e.g., "stage 1 only: spike on interface shape, discarded after"). A gate written as "code review" or "pass the review" without a stage range means all 9 stages. Never skip a stage to save wall time; compact between phases instead.
 - **Names the ship audit pipeline.**
 
 ## What A Good Plan Forbids
@@ -42,6 +42,7 @@ A planner, not a builder. Your output is three files: `plans/<name>-plan.md`, `p
 - "Will add tests later" language.
 - Any hardcoded path, URL, or identifier in source.
 - Mutating reviewer or planner template files in place.
+- Gate language that leaves stage coverage ambiguous (e.g., "run the review"). Write `code stages 1–9` or `stage 1 only: <reason>`.
 
 ## Output Artifacts
 

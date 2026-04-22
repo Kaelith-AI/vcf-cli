@@ -1173,18 +1173,20 @@ async function runInstallSkills(client: string, opts: { dest?: string }): Promis
   if (!spec) {
     err(`unknown client '${client}' — supported: ${Object.keys(SKILL_CLIENTS).join(", ")}`, 2);
   }
-  // Resolve packaged skills dir (one level up from dist/).
-  const pkgSkillsDir = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "skills", client);
+  const skillsRoot = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "skills");
+  const pkgSkillsDir = join(skillsRoot, client);
   if (!existsSync(pkgSkillsDir)) {
     err(`skill pack missing in package at ${pkgSkillsDir}`, 3);
   }
+  const commonDir = join(skillsRoot, "common");
   const dest = opts.dest ?? spec.defaultDest();
   await mkdir(dest, { recursive: true });
 
   let installed = 0;
   let skipped = 0;
-  const entries = await readdir(pkgSkillsDir);
 
+  // Client-specific pack (layout-native).
+  const entries = await readdir(pkgSkillsDir);
   if (spec.layout === "nested-md") {
     for (const name of entries) {
       const src = join(pkgSkillsDir, name);
@@ -1218,7 +1220,86 @@ async function runInstallSkills(client: string, opts: { dest?: string }): Promis
       installed++;
     }
   }
+
+  // Common pack: shared source-of-truth markdown transformed per client layout.
+  // Source shape: skills/common/<name>.md with frontmatter.
+  if (existsSync(commonDir)) {
+    const commonEntries = await readdir(commonDir);
+    for (const name of commonEntries) {
+      if (!name.endsWith(".md")) continue;
+      const base = name.slice(0, -3);
+      const src = join(commonDir, name);
+      const raw = await readFile(src, "utf8");
+      const parsed = parseSkillFrontmatter(raw);
+      if (!parsed) {
+        log(`common/${name} has no frontmatter — skipping`);
+        skipped++;
+        continue;
+      }
+      if (spec.layout === "nested-md") {
+        const dstDir = join(dest, base);
+        if (existsSync(dstDir)) {
+          log(`${dstDir} exists — skipping (edit manually or remove to reinstall)`);
+          skipped++;
+          continue;
+        }
+        await mkdir(dstDir, { recursive: true });
+        await writeFile(join(dstDir, "SKILL.md"), raw, "utf8");
+        installed++;
+      } else {
+        const dst = join(dest, `${base}.toml`);
+        if (existsSync(dst)) {
+          log(`${dst} exists — skipping (edit manually or remove to reinstall)`);
+          skipped++;
+          continue;
+        }
+        await writeFile(dst, renderFlatToml(parsed.description, parsed.body), "utf8");
+        installed++;
+      }
+    }
+  }
+
   log(`install-skills: ${installed} installed, ${skipped} skipped at ${dest}`);
+}
+
+/**
+ * Parse a minimal YAML-frontmatter markdown file: `--- ... --- <body>`.
+ * Returns `{ description, body }` or null if no frontmatter is present.
+ * Only supports the two fields the common skill pack uses (`name`,
+ * `description`) — not a general YAML parser.
+ */
+function parseSkillFrontmatter(
+  raw: string,
+): { name: string; description: string; body: string } | null {
+  if (!raw.startsWith("---\n")) return null;
+  const end = raw.indexOf("\n---\n", 4);
+  if (end < 0) return null;
+  const fm = raw.slice(4, end);
+  const body = raw.slice(end + 5);
+  let name = "";
+  let description = "";
+  for (const line of fm.split("\n")) {
+    const m = /^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.*)$/.exec(line);
+    if (!m || !m[1]) continue;
+    const key = m[1];
+    let value = (m[2] ?? "").trim();
+    if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+    if (key === "name") name = value;
+    else if (key === "description") description = value;
+  }
+  return { name, description, body };
+}
+
+/**
+ * Render a gemini-style flat-TOML skill entry. Uses triple-single-quoted
+ * literal strings so embedded backticks / double-quotes / backslashes do
+ * not need escaping. We only escape the delimiter itself (`'''`) in body
+ * text — rare, but handled conservatively.
+ */
+function renderFlatToml(description: string, body: string): string {
+  const safeDescription = description.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const safeBody = body.replace(/'''/g, "''\\'");
+  return `description = "${safeDescription}"\n\nprompt = '''\n${safeBody.trimEnd()}\n'''\n`;
 }
 
 // ---- vcf update-primers ----------------------------------------------------
