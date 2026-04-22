@@ -262,6 +262,24 @@ export const LessonsSchema = z
 
 export type Lessons = z.infer<typeof LessonsSchema>;
 
+// ---- Report (lifecycle_report shaping) -------------------------------------
+
+export const ReportSchema = z
+  .object({
+    // Max audit rows included per lifecycle section's `recent` list (trimmed
+    // by ts descending). Higher = richer structured report + bigger
+    // narrative-mode prompts. 500 is the default — caps runtime on the
+    // 10k-audit-row perf target and keeps per-section LLM prompts under
+    // ~30K tokens at typical row width.
+    audit_rows_per_section: z.number().int().positive().max(5000).default(500),
+    // Same idea for recent artifacts / reviews / builds / lessons tables.
+    // Kept smaller because these tables grow slower than audit.
+    recent_rows_per_section: z.number().int().positive().max(500).default(50),
+  })
+  .strict();
+
+export type Report = z.infer<typeof ReportSchema>;
+
 // ---- Embeddings (optional; off by default) ---------------------------------
 
 export const EmbeddingsSchema = z
@@ -312,6 +330,10 @@ export const ConfigSchema = z
     embeddings: EmbeddingsSchema.optional(),
     defaults: DefaultsSchema.optional(),
     lessons: LessonsSchema.default({ default_scope: "project" }),
+    report: ReportSchema.default({
+      audit_rows_per_section: 500,
+      recent_rows_per_section: 50,
+    }),
   })
   .strict()
   .superRefine((cfg, ctx) => {

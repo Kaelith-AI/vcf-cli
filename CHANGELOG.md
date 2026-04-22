@@ -12,6 +12,20 @@ endpoint/model arguments by routing through `config.yaml`.
 
 ### Added
 
+- **`lifecycle_report` tool + `vcf lifecycle-report` CLI** (phase-2 inward
+  loop, followup #27 — Phase C). Structured mode emits a versioned JSON
+  (`src/schemas/lifecycle-report.schema.ts`, schema 1.0.0) plus a
+  rendered markdown view at `plans/lifecycle-report.{md,json}`; no LLM
+  call, deterministic, target under 2s on a 10K-audit-row fixture.
+  Narrative mode fans per-section LLM calls to
+  `config.defaults.lifecycle_report` (one call per non-project
+  section) and appends a `generated_by: { model_id, endpoint }` footer
+  plus a pointer to the structured JSON. Redaction runs on every
+  outbound prompt (verified by a data-flow test). Perf fixture lives
+  at `test/perf/lifecycle_report_10k.test.ts`.
+- **`config.report` block** — `audit_rows_per_section` (default 500)
+  and `recent_rows_per_section` (default 50) tune the structured-mode
+  slice and the per-section LLM prompt size in narrative mode.
 - **`response_log_add` formal schema** (phase-2 inward loop, followup #22
   — Phase B). Input is now `{ run_id, finding_ref?, builder_claim,
   response_text, references? }`; registered as the whole `ZodObject` so

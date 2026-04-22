@@ -163,6 +163,18 @@ Builder responds via `/log-response` — disagreements are respected by future r
 
 Each `review_execute` call loads a **per-model calibration overlay** on top of the base reviewer role: the resolver walks `reviewer-<type>.<family>.md → reviewer-<type>.<trust-level>.md → reviewer-<type>.md` and picks the most specific one available. Family overlays (e.g. `reviewer-code.qwen.md`) are opt-in; `.frontier` and `.local` trust-level overlays ship by default and correct the known calibration biases surfaced during dual-model dogfooding (frontier over-flags with padded findings; local hallucinates on redaction markers and keyword shape). The applied overlay shows up in the `review_execute` envelope so you can confirm which calibration was in effect.
 
+### 7.25. Lifecycle report (any phase)
+
+> _"vcf lifecycle-report --project $(pwd)"_ (CLI)
+> _"/lifecycle-report structured"_ (MCP tool)
+
+`lifecycle_report` snapshots the project: audit activity, artifact index, review history, decisions, response log, builds, and lessons. Two modes:
+
+- **Structured** (`mode: structured`) — deterministic, no LLM call. Writes `plans/lifecycle-report.md` + `lifecycle-report.json`. Target: under 2s on a 10K-audit-row project (enforced by `test/perf/lifecycle_report_10k.test.ts`). The JSON is a versioned contract (`src/schemas/lifecycle-report.schema.ts`); downstream tools can consume it without re-implementing the assembly.
+- **Narrative** (`mode: narrative`) — fan out per-section LLM calls to `config.defaults.lifecycle_report` (one call per non-project section, redacted before send). Output carries a `generated_by: { model_id, endpoint }` footer plus a pointer back to the structured JSON so a reader can cross-check the prose. Target: under 60s on the same dataset.
+
+The CLI flags mirror the tool: `--mode structured|narrative`, `--format md|json|both`, `--include <csv>`, `--frontier` (opt into public-trust endpoints for narrative mode).
+
 ### 7.5. Log lessons (during or after any phase)
 
 > _"/log-lesson"_
