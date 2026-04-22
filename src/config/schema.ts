@@ -252,7 +252,13 @@ export const LessonsSchema = z
     // Absolute path to the global lessons DB. `~` and `${ENV_VAR}` are
     // expanded at resolve time (loader + DB opener), not here, so accept a
     // loose string. Default resolution: `~/.vcf/lessons.db`.
-    global_db_path: z.string().min(1).max(4096).optional(),
+    //
+    // Explicit `null` disables the cross-project mirror entirely: lesson_log_add
+    // skips the mirror write (project DB remains authoritative); lesson_search
+    // rejects `scope: "global" | "all"` with E_SCOPE_DENIED. Operators running
+    // VCF on a shared workstation alongside sensitive / NDA work use this to
+    // keep each project's lessons local.
+    global_db_path: z.union([z.string().min(1).max(4096), z.null()]).optional(),
     // Fallback scope for `lesson_log_add` when the caller omits `scope`.
     // Most lessons are project-specific; promote to `universal` only when
     // the observation is cross-project guidance.

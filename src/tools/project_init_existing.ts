@@ -19,18 +19,16 @@
 //   - review_prepare and the rest of the lifecycle surface already handle
 //     the "no spec, no plan" case gracefully; no changes required there.
 
-import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, resolve as resolvePath } from "node:path";
+import { resolve as resolvePath } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
-import { slugify } from "../util/slug.js";
-import { openProjectDb, type ProjectState } from "../db/project.js";
+import { type ProjectState } from "../db/project.js";
 import { writeAudit } from "../util/audit.js";
-import { upsertProject } from "../util/projectRegistry.js";
+import { adoptProject } from "../project/adopt.js";
 import { McpError } from "../errors.js";
 
 const ALLOWED_STATES = [
@@ -106,61 +104,31 @@ export function registerProjectInitExisting(server: McpServer, deps: ServerDeps)
           }
 
           const name = parsed.name ?? basenameOf(target);
-          const projectSlug = slugify(name);
 
-          await mkdir(join(target, ".vcf"), { recursive: true });
-          const dbPath = join(target, ".vcf", "project.db");
-          const freshDb = !existsSync(dbPath);
-          const db = openProjectDb({ path: dbPath });
-          const now = Date.now();
+          const result = await adoptProject({
+            root: target,
+            name,
+            state: parsed.state as ProjectState,
+            globalDb: deps.globalDb,
+          });
 
-          // Idempotent: if a project row already exists at id=1, don't clobber
-          // its state/name silently. Re-adoption refreshes `adopted` and
-          // `updated_at` but preserves whatever state + name the user already
-          // chose.
-          const existing = db
-            .prepare("SELECT id, name, state, adopted FROM project WHERE id = 1")
-            .get() as { id: number; name: string; state: string; adopted: number } | undefined;
+          const summary = result.existing
+            ? `Re-adopted project "${result.existing.name}" at ${target} (mode=${parsed.mode}, state preserved=${result.existing.state}).`
+            : `Adopted project "${name}" at ${target} (mode=${parsed.mode}, state=${parsed.state}, fresh project.db=${result.freshDb}).`;
 
-          if (existing) {
-            db.prepare(
-              `UPDATE project SET adopted = 1, updated_at = ?, root_path = ? WHERE id = 1`,
-            ).run(now, target);
-          } else {
-            db.prepare(
-              `INSERT INTO project (id, name, root_path, state, created_at, updated_at, spec_path, adopted)
-               VALUES (1, ?, ?, ?, ?, ?, NULL, 1)`,
-            ).run(name, target, parsed.state, now, now);
-          }
-          db.close();
-
-          // Registry upsert — surface in `vcf project list` + portfolio_graph.
-          try {
-            upsertProject(deps.globalDb, {
-              name: projectSlug,
-              root_path: target,
-              state: existing?.state ?? parsed.state,
-            });
-          } catch {
-            /* non-fatal — registry is a convenience, not a requirement */
-          }
-
-          const summary = existing
-            ? `Re-adopted project "${existing.name}" at ${target} (mode=${parsed.mode}, state preserved=${existing.state}).`
-            : `Adopted project "${name}" at ${target} (mode=${parsed.mode}, state=${parsed.state}, fresh project.db=${freshDb}).`;
-
-          return success([target, dbPath], summary, {
+          return success([target, result.projectDbPath], summary, {
             ...(parsed.expand
               ? {
                   content: {
                     project_path: target,
-                    name: existing?.name ?? name,
-                    slug: projectSlug,
-                    state: existing?.state ?? parsed.state,
+                    name: result.existing?.name ?? name,
+                    slug: result.slug,
+                    state: result.existing?.state ?? parsed.state,
                     mode: parsed.mode,
                     adopted: true,
-                    fresh_db: freshDb,
-                    project_db: dbPath,
+                    fresh_db: result.freshDb,
+                    project_db: result.projectDbPath,
+                    registry_warning: result.registryWarning,
                   },
                 }
               : {

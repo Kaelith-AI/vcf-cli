@@ -48,11 +48,19 @@ export const GLOBAL_LESSONS_MIGRATIONS: Migration[] = [
 ];
 
 /**
- * Resolve the configured path against ~ and absoluteness rules. Returns the
- * expanded absolute path or throws E_VALIDATION with a precise message when
- * the caller's YAML is malformed.
+ * Resolve the configured path against ~ and absoluteness rules.
+ *
+ * Returns:
+ *   - `null` when the operator has explicitly disabled the mirror
+ *     (`config.lessons.global_db_path: null`). Callers MUST treat this as
+ *     "the cross-project mirror is off for this project" — lesson writes
+ *     skip the mirror, cross-scope reads are refused.
+ *   - The expanded absolute path otherwise (default `~/.vcf/lessons.db`).
+ *
+ * Throws E_VALIDATION when the caller's YAML is malformed.
  */
-export function resolveGlobalLessonsPath(configured?: string): string {
+export function resolveGlobalLessonsPath(configured?: string | null): string | null {
+  if (configured === null) return null;
   if (!configured || configured.trim() === "") return DEFAULT_GLOBAL_LESSONS_PATH;
   const expanded = configured.startsWith("~")
     ? join(homedir(), configured.slice(1).replace(/^[/\\]/, ""))
@@ -121,9 +129,16 @@ const HANDLE_CACHE = new Map<string, DatabaseSync>();
  * Lazily open the global lessons DB for the resolved path. Re-uses the cached
  * handle across tool calls in the same process. Tests that open a second
  * path will get a second handle automatically.
+ *
+ * Returns `null` when the operator has disabled the mirror
+ * (`config.lessons.global_db_path: null`). Callers MUST branch on null
+ * rather than treating it as an error.
  */
-export function getGlobalLessonsDb(configuredPath: string | undefined): DatabaseSync {
+export function getGlobalLessonsDb(
+  configuredPath: string | null | undefined,
+): DatabaseSync | null {
   const path = resolveGlobalLessonsPath(configuredPath);
+  if (path === null) return null;
   let db = HANDLE_CACHE.get(path);
   if (!db) {
     db = openGlobalLessonsDb({ path });

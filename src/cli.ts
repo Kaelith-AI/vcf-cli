@@ -790,10 +790,8 @@ async function runPackRemove(name: string): Promise<void> {
 async function runAdopt(opts: { path: string; name?: string; state?: string }): Promise<void> {
   const { basename } = await import("node:path");
   const { openGlobalDb } = await import("./db/global.js");
-  const { upsertProject } = await import("./util/projectRegistry.js");
-  const { openProjectDb } = await import("./db/project.js");
-  const { slugify } = await import("./util/slug.js");
   const { assertInsideAllowedRoot } = await import("./util/paths.js");
+  const { adoptProject } = await import("./project/adopt.js");
 
   const absRoot = resolvePath(opts.path);
   if (!existsSync(absRoot)) {
@@ -805,11 +803,9 @@ async function runAdopt(opts: { path: string; name?: string; state?: string }): 
   }
 
   // Mirror the MCP tool's allowed_roots check so the CLI surface has the same
-  // blast-radius guarantee. If config is present but fails to load (parse /
-  // validation errors), refuse — a malformed config silently disabling the
-  // safety check is exactly the failure mode followup-review/code-8 +
-  // security-1 flagged. The only tolerated case is "config does not exist"
-  // (pre-init), detected explicitly via existsSync before any load attempt.
+  // blast-radius guarantee. Config-missing is the only tolerated case
+  // (pre-init bootstrap); anything else — parse failure, validation failure,
+  // denied scope — refuses.
   const configPath = DEFAULT_CONFIG_PATH();
   if (existsSync(configPath)) {
     try {
@@ -844,57 +840,31 @@ async function runAdopt(opts: { path: string; name?: string; state?: string }): 
   // Cross-platform basename — `split("/").pop()` was POSIX-only and returned
   // the whole string on Windows (`C:\work\repo` → `C:\work\repo`).
   const name = opts.name ?? (basename(absRoot) || "project");
-  const projectSlug = slugify(name);
 
-  await mkdir(join(absRoot, ".vcf"), { recursive: true });
-  const dbPath = join(absRoot, ".vcf", "project.db");
-  const freshDb = !existsSync(dbPath);
-  const pdb = openProjectDb({ path: dbPath });
-  const now = Date.now();
-  const existing = pdb.prepare("SELECT id, name, state FROM project WHERE id = 1").get() as
-    | { id: number; name: string; state: string }
-    | undefined;
-
-  if (existing) {
-    pdb
-      .prepare(`UPDATE project SET adopted = 1, updated_at = ?, root_path = ? WHERE id = 1`)
-      .run(now, absRoot);
-  } else {
-    pdb
-      .prepare(
-        `INSERT INTO project (id, name, root_path, state, created_at, updated_at, spec_path, adopted)
-       VALUES (1, ?, ?, ?, ?, ?, NULL, 1)`,
-      )
-      .run(name, absRoot, state, now, now);
-  }
-  pdb.close();
-
-  // Registry write is advisory — if it fails, the local project.db is still
-  // authoritative and re-running `vcf adopt` heals the registry. Match the
-  // MCP tool's non-fatal pattern so the CLI doesn't confuse operators with
-  // a "failed" exit for a best-effort side-effect.
   const globalDb = openGlobalDb({ path: resolvePath(homedir(), ".vcf", "vcf.db") });
-  let registryWarning: string | null = null;
   try {
-    upsertProject(globalDb, {
-      name: projectSlug,
-      root_path: absRoot,
-      state: existing?.state ?? state,
+    const result = await adoptProject({
+      root: absRoot,
+      name,
+      state: state as import("./db/project.js").ProjectState,
+      globalDb,
     });
-  } catch (e) {
-    registryWarning = `global registry update failed (${(e as Error).message}) — local project.db is adopted; re-run 'vcf adopt' to heal the registry`;
+
+    if (result.existing) {
+      log(
+        `re-adopted project '${result.existing.name}' at ${absRoot} (state=${result.existing.state} preserved)`,
+      );
+    } else {
+      log(
+        `adopted project '${name}' at ${absRoot} (state=${state}, fresh project.db=${result.freshDb})`,
+      );
+      log(`  registered in global registry as '${result.slug}'`);
+      log(`  next: run reviews with 'vcf-mcp' in ${absRoot} or start a project-scope MCP session`);
+    }
+    if (result.registryWarning) log(`warning: ${result.registryWarning}`);
   } finally {
     globalDb.close();
   }
-
-  if (existing) {
-    log(`re-adopted project '${existing.name}' at ${absRoot} (state=${existing.state} preserved)`);
-  } else {
-    log(`adopted project '${name}' at ${absRoot} (state=${state}, fresh project.db=${freshDb})`);
-    log(`  registered in global registry as '${projectSlug}'`);
-    log(`  next: run reviews with 'vcf-mcp' in ${absRoot} or start a project-scope MCP session`);
-  }
-  if (registryWarning) log(`warning: ${registryWarning}`);
 }
 
 // ---- vcf lifecycle-report --------------------------------------------------

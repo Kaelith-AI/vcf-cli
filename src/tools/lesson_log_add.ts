@@ -105,33 +105,42 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
           );
           const projectLessonId = Number(projectRun.lastInsertRowid);
 
-          // Global DB mirror. Wrapped in try/catch so a global-DB outage
-          // does not block the project-DB write — the project copy is
-          // authoritative; the global mirror is a search convenience.
+          // Global DB mirror. Three outcomes:
+          //   - `disabled-by-config`: operator set `config.lessons.global_db_path: null`
+          //     to opt out of cross-project mirroring. Skip cleanly, no error.
+          //   - success: write mirrored, id returned.
+          //   - failure: local write is authoritative; log the mirror error
+          //     into the envelope and audit but do not fail the tool call.
           let globalLessonId: number | null = null;
+          let globalMirrorStatus: "ok" | "disabled-by-config" | "failed" = "ok";
           let globalMirrorError: string | null = null;
-          try {
-            const globalDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
-            const globalRun = globalDb
-              .prepare(
-                `INSERT INTO lessons
-                   (project_root, title, context, observation, actionable_takeaway, scope, stage, tags_json, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                projectRoot,
-                redactedBody.title,
-                redactedBody.context,
-                redactedBody.observation,
-                redactedBody.actionable_takeaway,
-                scope,
-                stage,
-                tagsJson,
-                createdAt,
-              );
-            globalLessonId = Number(globalRun.lastInsertRowid);
-          } catch (err) {
-            globalMirrorError = err instanceof Error ? err.message : String(err);
+          const globalDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
+          if (globalDb === null) {
+            globalMirrorStatus = "disabled-by-config";
+          } else {
+            try {
+              const globalRun = globalDb
+                .prepare(
+                  `INSERT INTO lessons
+                     (project_root, title, context, observation, actionable_takeaway, scope, stage, tags_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                )
+                .run(
+                  projectRoot,
+                  redactedBody.title,
+                  redactedBody.context,
+                  redactedBody.observation,
+                  redactedBody.actionable_takeaway,
+                  scope,
+                  stage,
+                  tagsJson,
+                  createdAt,
+                );
+              globalLessonId = Number(globalRun.lastInsertRowid);
+            } catch (err) {
+              globalMirrorStatus = "failed";
+              globalMirrorError = err instanceof Error ? err.message : String(err);
+            }
           }
 
           const summaryParts = [
@@ -140,7 +149,9 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
             parsed.tags.length > 0 ? `tags=${parsed.tags.join(",")}` : "no-tags",
           ];
           if (redactionApplied) summaryParts.push("redaction-applied");
-          if (globalMirrorError) summaryParts.push("global-mirror-failed");
+          if (globalMirrorStatus === "disabled-by-config")
+            summaryParts.push("mirror-disabled-by-config");
+          else if (globalMirrorStatus === "failed") summaryParts.push("mirror-failed");
 
           return success([], summaryParts.join("; "), {
             content: {
@@ -150,6 +161,7 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
               stage,
               tags: parsed.tags,
               redaction_applied: redactionApplied,
+              mirror_status: globalMirrorStatus,
               global_mirror_error: globalMirrorError,
               created_at: createdAt,
               ...(parsed.expand

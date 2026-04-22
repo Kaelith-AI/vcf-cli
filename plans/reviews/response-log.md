@@ -116,3 +116,33 @@ finding_ref: production:stage-4:lesson-search-fullscan
 Agree on the evidence-vs-claim gap. The '10k entries / p95 <100ms' target in the Phase-2 plan was aspirational and the v0.5.0 implementation's full-table-read + in-JS filter doesn't back it. For the realistic corpus at ship (≤1k lessons per operator) the in-memory path is sub-10ms locally, but the scale claim was overstated. Narrowed the plan to 'sub-100ms at ≤1k lessons' until SQL pushdown lands, filed followup #40 with the fix shape (WHERE stage/scope pushdown, LIKE or fts5 for query substring search, LIMIT cap before in-memory ranking, reinstate the 10k target after a perf test mirroring lifecycle_report_10k.test.ts passes). No code change for 0.5.0 — the claim was the gap.
 
 ---
+---
+run_id: security-1-20260422T074108994Z
+builder_claim: agree
+created_at: 2026-04-22T07:50:25.050Z
+finding_ref: security:stage-1:mirror-disable-claim-unbacked
+---
+
+Legit catch. The README/CHANGELOG language said `config.lessons.global_db_path: null` disabled the cross-project mirror, but the shipped schema defined it as optional-string-only and the code unconditionally resolved any missing/empty value to the default path. Claim was ahead of implementation. Fixed end-to-end in this commit: (1) LessonsSchema now accepts `z.union([z.string(), z.null()])`; (2) resolveGlobalLessonsPath returns null for null input; (3) getGlobalLessonsDb returns null when the path resolves to null; (4) lesson_log_add skips the mirror write cleanly and reports `mirror_status: 'disabled-by-config'` in the envelope; (5) lesson_search rejects scope=global|all with E_SCOPE_DENIED when the mirror is off. New test file test/integration/lesson_mirror_disabled.test.ts covers the full contract: no mirror file created when null, E_SCOPE_DENIED on global/all reads, default path still mirrors for the regression guard. Docs now match shipped behavior.
+
+---
+---
+run_id: code-2-20260422T074150596Z
+builder_claim: agree
+created_at: 2026-04-22T07:50:25.392Z
+finding_ref: code:stage-2:duplicated-adoption-unresolved
+---
+
+Moved from deferred to fixed. Prior pass response logged 'agree, follow-up #39 in 0.6.0', but the reviewer correctly noted that carry-forward requires either a verified code change or an explicit accepted_risk — a deferred note doesn't qualify. Extracted the shared adoption core at src/project/adopt.ts: mkdir .vcf, open project.db, idempotent row upsert with adopted=1, global-registry upsert with non-fatal registryWarning. Both callers refactored to thin wrappers: src/cli.ts runAdopt owns path validation + config loading + allowed_roots + state enum + CLI messaging; src/tools/project_init_existing.ts owns MCP schema + scope check + audit + envelope. No behavior change — both paths now exercise the same DB-write sequence. New test/integration/adopt_parity.test.ts covers: fresh adoption creates project.db + registry row; re-adoption preserves original name + state; registry failure is non-fatal and surfaced via registryWarning. 277/277 tests green.
+
+---
+---
+run_id: production-2-20260422T074219406Z
+builder_claim: agree
+created_at: 2026-04-22T07:50:25.738Z
+finding_ref: production:stage-2:mirror-state-durability
+---
+
+Partial agree. On the documentation side, the overstated 'disable via null' claim is now fixed (see security/stage-1 response). On the runtime side, the reviewer's kernel — mirror failures swallowed with no replay — is a real supportability gap but is low-impact given current operating characteristics: mirror failures have never been observed across ~100 lesson writes in dogfood; the envelope surfaces them when they happen; and the project DB is authoritative so correctness is never at risk. Filed as followup #42 with the fix shape (mirror_status column on project.db.lessons, `vcf lessons reconcile` CLI subcommand, optional lazy-reconcile on next lesson_log_add). Not a 0.5.0 blocker — audit + envelope already give operators the signal; what's missing is the replay mechanism, which is Phase-3 material.
+
+---

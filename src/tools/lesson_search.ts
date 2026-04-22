@@ -79,6 +79,17 @@ export function registerLessonSearch(server: McpServer, deps: ServerDeps): void 
           let globalRows: LessonRow[] = [];
           if (parsed.scope !== "project") {
             const globalDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
+            if (globalDb === null) {
+              // Operator has set `config.lessons.global_db_path: null` to
+              // disable the cross-project mirror. Refuse the query rather
+              // than silently returning an empty set — the caller asked for
+              // cross-project data and needs to know the boundary is shut.
+              throw new McpError(
+                "E_SCOPE_DENIED",
+                `lesson_search(scope="${parsed.scope}") is disabled: config.lessons.global_db_path is null. ` +
+                  `Use scope="project" for this-project lessons, or re-enable the mirror in ~/.vcf/config.yaml.`,
+              );
+            }
             globalRows = readLessons(globalDb, null);
           }
 
