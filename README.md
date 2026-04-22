@@ -161,6 +161,16 @@ Stage-entry rule: Stage N>1 **requires** Stage N-1 PASS unless `force: true` (au
 
 Builder responds via `/log-response` — disagreements are respected by future reviewers.
 
+### 7.5. Log lessons (during or after any phase)
+
+> _"/log-lesson"_
+
+`lesson_log_add` appends a structured lesson to the project lesson log. Required: `title`, `observation`. Optional: `context`, `actionable_takeaway`, `scope` (`project` \| `universal`; default from `config.lessons.default_scope`), `stage`, `tags`. Lesson text runs through the same redactor that gates outbound LLM traffic, so a pasted `sk-…` key or `.env`-shaped value lands in the DB as `[REDACTED:openai-key]` / `[REDACTED]` before any mirror write. Every call also writes exactly one audit row.
+
+Each lesson is persisted twice: once in `<project>/.vcf/project.db`, once mirrored into the cross-project global lessons DB at `config.lessons.global_db_path` (default `~/.vcf/lessons.db`). The project copy is authoritative; the mirror enables `lesson_search({ scope: "global" | "all" })` across every project that's opted in.
+
+`lesson_search` accepts `query` (substring), `tags` (AND-filter), `stage`, `scope`, and `limit` (default 20, max 200). Ranking: `tag-hit-count × 2 + title-exact 10 / title-prefix 5 / title-contains 3 / body-contains 1`. `expand=true` attaches the observation + context bodies; the default envelope returns metadata only to keep the token cost low.
+
 ### 8. Ship
 
 > _"/ship-audit"_

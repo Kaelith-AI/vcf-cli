@@ -12,6 +12,26 @@ endpoint/model arguments by routing through `config.yaml`.
 
 ### Added
 
+- **`lesson_log_add` + `lesson_search` tools** (phase-2 inward loop,
+  followup #11 — Phase A). Project-scope lesson log persisted twice: once
+  in `<project>/.vcf/project.db` (migration v3, new `lessons` table), once
+  mirrored into a separate cross-project global DB at
+  `config.lessons.global_db_path` (default `~/.vcf/lessons.db`). Lesson
+  text runs through the existing redaction pass before either persist, so
+  an `sk-…` key lands as `[REDACTED:openai-key]`. `lesson_search` accepts
+  `query` / `tags` (AND-filter) / `stage` / `scope` (`project` | `global`
+  | `all` with de-dup). SDK-level `.strict()` rejection of unknown input
+  keys — the input schema is registered as the whole `ZodObject`, not
+  `.shape`.
+- **`config.lessons` block** — `global_db_path` (optional, `~` expanded
+  at resolve time) + `default_scope` (`project` | `universal`). Surfaced
+  via `config_get section=lessons`.
+- **`E_UNWRITABLE` error code** — surfaced by `openGlobalLessonsDb` when
+  the target directory cannot be created or lacks write permission.
+- **Redaction pattern for OpenAI / Anthropic-style keys** — bare
+  `sk-[A-Za-z0-9_-]{20,}` now redacts to `[REDACTED:openai-key]` via the
+  shared `redact()` pass that already covers AWS keys, JWTs, PEM blocks,
+  and `.env`-style assignments.
 - **`project_init_existing` tool + `vcf adopt` CLI** (followup #20, bypass
   mode). Adopts a pre-existing project directory into VCF tracking without
   scaffolding AGENTS.md/CLAUDE.md/plans/git-hooks. Creates `.vcf/project.db`

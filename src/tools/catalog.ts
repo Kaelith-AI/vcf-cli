@@ -28,6 +28,7 @@ const ConfigGetInput = z
         "review",
         "redaction",
         "telemetry",
+        "lessons",
         "all",
       ])
       .default("all"),
@@ -69,6 +70,7 @@ export function registerConfigGet(server: McpServer, deps: ServerDeps): void {
                 ? { dsn_configured: true }
                 : { dsn_configured: false }),
             },
+            lessons: deps.config.lessons,
           };
           const out =
             parsed.section === "all" ? redacted : { [parsed.section]: redacted[parsed.section] };

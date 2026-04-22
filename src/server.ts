@@ -38,6 +38,8 @@ import { registerBuildContext } from "./tools/build_context.js";
 import { registerBuildSwap } from "./tools/build_swap.js";
 import { registerDecisionLogAdd, registerDecisionLogList } from "./tools/decision_log.js";
 import { registerResponseLogAdd } from "./tools/response_log.js";
+import { registerLessonLogAdd } from "./tools/lesson_log_add.js";
+import { registerLessonSearch } from "./tools/lesson_search.js";
 import { registerTestGenerate } from "./tools/test_generate.js";
 import { registerTestExecute } from "./tools/test_execute.js";
 import { registerTestAnalyze } from "./tools/test_analyze.js";
@@ -170,6 +172,8 @@ export function createServer(deps: ServerDeps): McpServer {
     registerDecisionLogAdd(server, deps);
     registerDecisionLogList(server, deps);
     registerResponseLogAdd(server, deps);
+    registerLessonLogAdd(server, deps);
+    registerLessonSearch(server, deps);
     registerTestGenerate(server, deps);
     registerTestExecute(server, deps);
     registerTestAnalyze(server, deps);

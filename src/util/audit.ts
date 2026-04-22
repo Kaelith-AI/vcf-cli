@@ -39,6 +39,10 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/ASIA[0-9A-Z]{16}/g, "[AWS_STS_KEY]"],
   // AWS secret-ish things (40-char base64-alike on same line as "secret")
   [/(?<=secret[^\n]*)[A-Za-z0-9/+=]{40}/gi, "[AWS_SECRET]"],
+  // OpenAI / Anthropic style keys (sk-... with ≥20 trailing chars). Placed
+  // before .env-style so a bare `sk-abc...` gets the specific marker rather
+  // than the generic [REDACTED].
+  [/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED:openai-key]"],
   // JWT
   [/eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, "[JWT]"],
   // PEM private keys

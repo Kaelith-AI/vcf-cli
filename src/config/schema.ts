@@ -239,6 +239,23 @@ export const DefaultsSchema = z
 
 export type Defaults = z.infer<typeof DefaultsSchema>;
 
+// ---- Lessons (project + global self-improvement log) -----------------------
+
+export const LessonsSchema = z
+  .object({
+    // Absolute path to the global lessons DB. `~` and `${ENV_VAR}` are
+    // expanded at resolve time (loader + DB opener), not here, so accept a
+    // loose string. Default resolution: `~/.vcf/lessons.db`.
+    global_db_path: z.string().min(1).max(4096).optional(),
+    // Fallback scope for `lesson_log_add` when the caller omits `scope`.
+    // Most lessons are project-specific; promote to `universal` only when
+    // the observation is cross-project guidance.
+    default_scope: z.enum(["project", "universal"]).default("project"),
+  })
+  .strict();
+
+export type Lessons = z.infer<typeof LessonsSchema>;
+
 // ---- Embeddings (optional; off by default) ---------------------------------
 
 export const EmbeddingsSchema = z
@@ -288,6 +305,7 @@ export const ConfigSchema = z
     audit: AuditSchema.default({ full_payload_storage: false }),
     embeddings: EmbeddingsSchema.optional(),
     defaults: DefaultsSchema.optional(),
+    lessons: LessonsSchema.default({ default_scope: "project" }),
   })
   .strict()
   .superRefine((cfg, ctx) => {

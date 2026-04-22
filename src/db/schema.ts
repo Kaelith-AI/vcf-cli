@@ -205,4 +205,31 @@ export const PROJECT_MIGRATIONS: Migration[] = [
       ALTER TABLE project ADD COLUMN adopted INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 3,
+    name: "lessons",
+    up: `
+      -- Phase-2 inward loop (#11): per-project lesson log. Mirrored to the
+      -- global lessons DB (~/.vcf/lessons.db) on every write so a vibe coder
+      -- can search across projects. scope = 'project' is the default; flip
+      -- to 'universal' when the observation is cross-project guidance.
+      -- stage nullable (not every lesson maps to one lifecycle step).
+      CREATE TABLE IF NOT EXISTS lessons (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        title                TEXT NOT NULL,
+        context              TEXT,
+        observation          TEXT NOT NULL,
+        actionable_takeaway  TEXT,
+        scope                TEXT NOT NULL CHECK (scope IN ('project','universal')),
+        stage                TEXT CHECK (stage IS NULL OR stage IN (
+                               'draft','planning','building','testing','reviewing','shipping','shipped'
+                             )),
+        tags_json            TEXT NOT NULL DEFAULT '[]',
+        created_at           INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_lessons_scope ON lessons(scope);
+      CREATE INDEX IF NOT EXISTS idx_lessons_stage ON lessons(stage);
+      CREATE INDEX IF NOT EXISTS idx_lessons_created_at ON lessons(created_at);
+    `,
+  },
 ];

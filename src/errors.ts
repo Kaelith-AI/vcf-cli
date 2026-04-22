@@ -27,6 +27,7 @@ export const ERROR_CODES = {
   E_VALIDATION: { retryable: false, description: "input failed schema validation" },
   E_CANCELED: { retryable: true, description: "tool run canceled by the client" },
   E_ENDPOINT_UNREACHABLE: { retryable: true, description: "configured endpoint did not respond" },
+  E_UNWRITABLE: { retryable: false, description: "target path is not writable" },
   E_CONFIRM_REQUIRED: {
     retryable: true,
     description: "destructive action needs a valid confirm_token",
