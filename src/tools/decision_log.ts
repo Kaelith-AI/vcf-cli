@@ -32,6 +32,15 @@ const DecisionLogAddInput = z
       .regex(/^[a-z0-9][a-z0-9-]*$/)
       .optional()
       .describe("slug of a prior decision this one replaces"),
+    review_type: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[a-z0-9][a-z0-9-]*$/)
+      .optional()
+      .describe(
+        "optional review type scope (e.g. 'code', 'security', 'production'). Omit for universal decisions shown in every review's snapshot.",
+      ),
     expand: z.boolean().default(false),
   })
   .strict();
@@ -84,8 +93,10 @@ export function registerDecisionLogAdd(server: McpServer, deps: ServerDeps): voi
           await writeFile(target, md, "utf8");
 
           deps.projectDb
-            .prepare("INSERT INTO decisions (slug, created_at, path) VALUES (?, ?, ?)")
-            .run(slug, Date.now(), target);
+            .prepare(
+              "INSERT INTO decisions (slug, created_at, path, review_type) VALUES (?, ?, ?, ?)",
+            )
+            .run(slug, Date.now(), target, parsed.review_type ?? null);
 
           // Mark the superseded entry (if any) superseded.
           if (parsed.supersedes) {

@@ -255,4 +255,18 @@ export const PROJECT_MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_response_log_finding ON response_log(finding_ref);
     `,
   },
+  {
+    version: 5,
+    name: "decisions_review_type",
+    up: `
+      -- Phase-2 inward loop close-out. Scope decisions to a review type so
+      -- review_prepare's decisions.snapshot.md can filter: a code reviewer
+      -- shouldn't read security-scoped decisions as context for their own
+      -- run. NULL = universal (shown in every review type's snapshot).
+      -- Existing rows keep review_type=NULL so legacy decisions stay visible
+      -- across all review types.
+      ALTER TABLE decisions ADD COLUMN review_type TEXT;
+      CREATE INDEX IF NOT EXISTS idx_decisions_review_type ON decisions(review_type);
+    `,
+  },
 ];

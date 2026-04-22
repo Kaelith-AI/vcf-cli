@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// Run a full N-stage review gate (code or security, 2..9) against the
-// current HEAD vs HEAD~1 diff. Sequential, fail-fast on any non-PASS.
+// Run a full N-stage review gate (code/security/production, 1..9) against
+// the current HEAD vs HEAD~1 diff. Sequential, fail-fast on non-PASS.
 //
-// Usage: node run-full-gate.mjs <type> <startStage> <endStage>
-//   e.g. node run-full-gate.mjs code 2 9
+// Usage:
+//   node run-full-gate.mjs <type> <startStage> <endStage> [endpoint] [model_id] [diff_ref]
+//
+// Defaults: endpoint=local-ollama, model_id=qwen3-coder:30b, diff_ref=HEAD~1..HEAD.
+// The optional trailing args enable dual-model (qwen+gpt) 27-stage runs for
+// the 0.5.0 release gate without forking the harness.
 
 import { spawn } from "node:child_process";
 
@@ -79,24 +83,24 @@ function callMcp(args, timeoutMs = 900_000) {
   });
 }
 
-async function runStage(type, stage) {
-  process.stderr.write(`\n[${type} stage ${stage}] preparing...\n`);
+async function runStage(type, stage, endpoint, modelId, diffRef) {
+  process.stderr.write(`\n[${type} stage ${stage} @${modelId}] preparing...\n`);
   const prep = await callMcp({
     name: "review_prepare",
-    arguments: { type, stage, diff_ref: "HEAD~1..HEAD" },
+    arguments: { type, stage, diff_ref: diffRef },
   });
   if (!prep.ok) {
     return { stage, ok: false, step: "prepare", error: prep };
   }
   const runId = prep.paths[0].split("/").pop();
-  process.stderr.write(`[${type} stage ${stage}] executing ${runId}...\n`);
+  process.stderr.write(`[${type} stage ${stage} @${modelId}] executing ${runId}...\n`);
   const exec = await callMcp(
     {
       name: "review_execute",
       arguments: {
         run_id: runId,
-        endpoint: "local-ollama",
-        model_id: "qwen3-coder:30b",
+        endpoint,
+        model_id: modelId,
         timeout_ms: 600_000,
       },
     },
@@ -109,6 +113,8 @@ async function runStage(type, stage) {
     stage,
     ok: true,
     run_id: runId,
+    model_id: modelId,
+    endpoint,
     verdict: exec.summary,
     report_path: exec.paths[0],
     overlay: exec.content?.overlay,
@@ -117,27 +123,32 @@ async function runStage(type, stage) {
 }
 
 async function main() {
-  const [type, startStr, endStr] = process.argv.slice(2);
+  const [type, startStr, endStr, endpointArg, modelArg, diffArg] = process.argv.slice(2);
   if (!type || !startStr || !endStr) {
-    console.error("usage: run-full-gate.mjs <type> <startStage> <endStage>");
+    console.error(
+      "usage: run-full-gate.mjs <type> <startStage> <endStage> [endpoint] [model_id] [diff_ref]",
+    );
     process.exit(2);
   }
+  const endpoint = endpointArg ?? "local-ollama";
+  const modelId = modelArg ?? "qwen3-coder:30b";
+  const diffRef = diffArg ?? "HEAD~1..HEAD";
   const start = Number(startStr);
   const end = Number(endStr);
   const results = [];
   for (let s = start; s <= end; s++) {
-    const r = await runStage(type, s);
+    const r = await runStage(type, s, endpoint, modelId, diffRef);
     results.push(r);
     if (!r.ok) {
       process.stderr.write(`\n${type} stage ${s} FAILED at ${r.step}: ${JSON.stringify(r.error).slice(0, 400)}\n`);
       break;
     }
-    process.stderr.write(`[${type} stage ${s}] ${r.verdict}\n`);
+    process.stderr.write(`[${type} stage ${s} @${modelId}] ${r.verdict}\n`);
     const hasNonInfo = Object.values(r.carry_forward ?? {}).some((arr) =>
       Array.isArray(arr) && arr.some((e) => e.severity !== "info"),
     );
     if (!r.verdict.includes("PASS") || hasNonInfo) {
-      process.stderr.write(`[${type} stage ${s}] non-PASS or non-info finding — stopping\n`);
+      process.stderr.write(`[${type} stage ${s} @${modelId}] non-PASS or non-info finding — stopping\n`);
       break;
     }
   }

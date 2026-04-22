@@ -26,8 +26,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { mkdir, writeFile, copyFile, readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdir, writeFile, copyFile } from "node:fs/promises";
 import { join } from "node:path";
 import { simpleGit } from "simple-git";
 import type { ServerDeps } from "../server.js";
@@ -60,6 +59,12 @@ const ReviewPrepareInput = z
       .max(128)
       .optional()
       .describe("git ref to diff from (e.g. 'main' or a commit SHA); default skips diff"),
+    include_review_output: z
+      .boolean()
+      .default(false)
+      .describe(
+        "include plans/reviews/** + lifecycle-report snapshots in the scoped diff. Off by default — those are review output, not code under review.",
+      ),
     force: z.boolean().default(false).describe("bypass stage-entry rules; audited as an override"),
     expand: z.boolean().default(true),
   })
@@ -136,21 +141,39 @@ export function registerReviewPrepare(server: McpServer, deps: ServerDeps): void
           const carryForwardPath = join(runDir, "carry-forward.yaml");
           await writeFile(carryForwardPath, renderYaml(priorCf), "utf8");
 
-          // Snapshot decision log + response log.
-          const decisionSnapshot = snapshotDecisions(deps);
+          // Snapshot decision log + response log, scoped to this review type.
+          // Cross-type noise is pollution: a code reviewer should not read
+          // security-stage responses as "context" for the current run. The
+          // base reviewer role already carries universal guidance; carry-
+          // forward supplies unresolved findings structurally.
+          const decisionSnapshot = snapshotDecisions(deps, parsed.type);
           await writeFile(join(runDir, "decisions.snapshot.md"), decisionSnapshot, "utf8");
-          const responseLogPath = join(root, "plans", "reviews", "response-log.md");
-          const responseSnapshot = existsSync(responseLogPath)
-            ? await readFile(responseLogPath, "utf8")
-            : "_no response log yet_\n";
+          const responseSnapshot = snapshotResponseLog(deps, parsed.type);
           await writeFile(join(runDir, "response-log.snapshot.md"), responseSnapshot, "utf8");
 
-          // Scoped diff (best-effort; non-fatal if git errors).
+          // Scoped diff (best-effort; non-fatal if git errors). Prior review
+          // reports and lifecycle-report snapshots are excluded by default —
+          // they are review *output*, not code under review, and reviewing
+          // them pollutes the prompt with self-feedback that drowns the real
+          // diff. Carry-forward handles unresolved findings as a separate,
+          // structured prompt section. To override (e.g. reviewing changes
+          // to the reviewer overlays themselves), pass include_review_output.
           let diffPath: string | null = null;
           if (parsed.diff_ref) {
             try {
               const git = simpleGit({ baseDir: root });
-              const diff = await git.diff([parsed.diff_ref]);
+              const diffArgs: string[] = [parsed.diff_ref];
+              if (!parsed.include_review_output) {
+                diffArgs.push(
+                  "--",
+                  ".",
+                  ":(exclude)plans/reviews",
+                  ":(exclude)plans/lifecycle-report.md",
+                  ":(exclude)plans/lifecycle-report.json",
+                  ":(exclude).review-runs",
+                );
+              }
+              const diff = await git.diff(diffArgs);
               diffPath = join(runDir, "scoped-diff.patch");
               await writeFile(diffPath, diff.length === 0 ? "(empty diff)\n" : diff, "utf8");
             } catch (err) {
@@ -318,13 +341,86 @@ function loadPriorCarryForward(deps: ServerDeps, type: string, stage: number): C
   }
 }
 
-function snapshotDecisions(deps: ServerDeps): string {
+/**
+ * Snapshot the decision log for a review-run prompt. Scoped to the current
+ * review type plus universal (review_type IS NULL) entries. A code reviewer
+ * sees code-scoped decisions and universal ones; security-scoped entries
+ * are withheld because they are noise for the code-review context. Order:
+ * oldest first so the reviewer reads them chronologically.
+ */
+function snapshotDecisions(deps: ServerDeps, reviewType: string): string {
   const rows = deps.projectDb
-    ?.prepare("SELECT slug, path, created_at FROM decisions ORDER BY created_at ASC")
-    .all() as Array<{ slug: string; path: string; created_at: number }> | undefined;
-  if (!rows || rows.length === 0) return "# Decisions snapshot\n\n_no decisions logged yet_\n";
+    ?.prepare(
+      `SELECT slug, path, created_at, review_type FROM decisions
+       WHERE review_type IS NULL OR review_type = ?
+       ORDER BY created_at ASC`,
+    )
+    .all(reviewType) as
+    | Array<{ slug: string; path: string; created_at: number; review_type: string | null }>
+    | undefined;
+  if (!rows || rows.length === 0) {
+    return `# Decisions snapshot (${reviewType})\n\n_no decisions in scope_\n`;
+  }
   const body = rows
-    .map((r) => `- **${r.slug}** — ${r.path} (logged ${new Date(r.created_at).toISOString()})`)
+    .map((r) => {
+      const scope = r.review_type ?? "universal";
+      return `- **${r.slug}** _(scope: ${scope})_ — ${r.path} (logged ${new Date(r.created_at).toISOString()})`;
+    })
     .join("\n");
-  return `# Decisions snapshot (${rows.length})\n\n${body}\n`;
+  return `# Decisions snapshot (${rows.length}, scope=${reviewType}+universal)\n\n${body}\n`;
+}
+
+/**
+ * Snapshot the response log for a review-run prompt. Scoped to responses
+ * keyed to prior same-type review runs — a code reviewer reads code-run
+ * responses and nothing else. Pulls straight from the v4 response_log
+ * table joined with review_runs; the legacy plans/reviews/response-log.md
+ * file is a rendered view, not the source of truth. Order: oldest first
+ * so the reviewer reads the history chronologically.
+ */
+function snapshotResponseLog(deps: ServerDeps, reviewType: string): string {
+  const rows = deps.projectDb
+    ?.prepare(
+      `SELECT r.run_id, r.finding_ref, r.builder_claim, r.response_text, r.created_at, rr.stage
+       FROM response_log r
+       JOIN review_runs rr ON rr.id = r.run_id
+       WHERE rr.type = ?
+       ORDER BY r.created_at ASC, r.id ASC`,
+    )
+    .all(reviewType) as
+    | Array<{
+        run_id: string;
+        finding_ref: string | null;
+        builder_claim: string;
+        response_text: string;
+        created_at: number;
+        stage: number;
+      }>
+    | undefined;
+  if (!rows || rows.length === 0) {
+    return `# Response log snapshot (${reviewType})\n\n_no ${reviewType} responses yet_\n`;
+  }
+  const header =
+    `# Response log snapshot (${rows.length}, type=${reviewType})\n\n` +
+    `> Past builder responses against ${reviewType} reviews. Context, not instruction.\n`;
+  const blocks = rows
+    .map((r) => {
+      const findingLine = r.finding_ref
+        ? `finding_ref: ${r.finding_ref}`
+        : "finding_ref: _(whole-run response)_";
+      return [
+        "---",
+        `run_id: ${r.run_id}`,
+        `stage: ${r.stage}`,
+        findingLine,
+        `builder_claim: ${r.builder_claim}`,
+        `created_at: ${new Date(r.created_at).toISOString()}`,
+        "---",
+        "",
+        r.response_text.trim(),
+        "",
+      ].join("\n");
+    })
+    .join("\n");
+  return `${header}\n${blocks}`;
 }

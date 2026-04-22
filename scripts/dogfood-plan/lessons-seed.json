@@ -1,0 +1,122 @@
+[
+  {
+    "title": "Zod .strict() silently drops when reconstructed through .shape",
+    "observation": "The MCP SDK's registerTool accepts either a ZodRawShape (from schema.shape) or a full AnySchema. Passing `.shape` discards the `.strict()` marker because the SDK rebuilds the validator from the raw shape and never re-applies modifiers. Unknown keys pass through the SDK boundary and land in the handler, defeating schema-level input validation.",
+    "actionable_takeaway": "Register inputSchema as the whole ZodObject (with .strict()), not the .shape. The SDK accepts AnySchema at that boundary and enforces unknown-key rejection at the protocol layer, returning MCP error -32602 before the handler runs.",
+    "context": "Phase-2 A: discovered while hardening lesson_log_add; dogfood 2026-04-22 drove the Phase-B pattern across response_log + reviewer tools.",
+    "scope": "universal",
+    "tags": ["zod", "mcp", "schema-validation", "regression"]
+  },
+  {
+    "title": "Local LLM cold-start timeouts need 600s overrides, not the 180s default",
+    "observation": "The default review_execute `timeout_ms` is 180000. First call of a session to a local Ollama endpoint routinely takes 90-180s for model load alone, leaving no headroom for the actual inference. Manifests as E_CANCELED that looks like a server bug but is a timeout budget.",
+    "actionable_takeaway": "Pass timeout_ms: 600000 explicitly on the first review_execute call of any session against a local endpoint. Harnesses (run-full-gate.mjs, driver.mjs) default to 600s. For frontier endpoints the default is adequate.",
+    "context": "Phase-2 B gate cold-start; mid-session fix to scripts/dogfood-plan/driver.mjs added per-call timeout override.",
+    "scope": "project",
+    "tags": ["mcp", "review", "timeout", "operational"]
+  },
+  {
+    "title": "Production reviewer must gate on artifact class in stage 1",
+    "observation": "Without an artifact-class gate, production reviewers demand SLOs, runbooks, pager routes, and DR procedures against developer CLI tools. Those are service-class artifacts — a category error for library/CLI/tool artifact classes. GPT-5.4 and Gemma both fire this way against vcf-cli without the overlay fix.",
+    "actionable_takeaway": "Reviewer-production overlay now forces stage-1 artifact-class triage: service / library / CLI / tool. Findings demanding service-grade artifacts against non-service classes are category errors, not blockers. Backup-path concerns remain legitimate.",
+    "context": "Phase-2 B: reviewer overlay v0.3 response to repeated pre-0.4 false BLOCKs.",
+    "scope": "universal",
+    "tags": ["review", "reviewer-overlay", "production", "artifact-class"]
+  },
+  {
+    "title": "Redaction markers are not committed secrets",
+    "observation": "A local reviewer flagged `[REDACTED:...]` in a diff as 'committed secret.' The marker is the scrubber's output — a real secret would appear as a literal value. This is a high-frequency hallucination on local models when the outbound redactor pre-processes the prompt and a redaction pattern appears in the rendered diff.",
+    "actionable_takeaway": "Reviewer-security overlay now explicitly: 'Redaction markers are scrubber output, not committed secrets. A real secret would appear as a literal value in the diff.' Local-model variant of the overlay (trust_level=local) carries the rule more aggressively.",
+    "context": "Phase-2 B: first surfaced pre-0.4 security-6, re-verified in Phase-2 gate evidence.",
+    "scope": "universal",
+    "tags": ["review", "reviewer-overlay", "security", "redaction"]
+  },
+  {
+    "title": "Response-log markdown parser must consume exactly one trailing delimiter",
+    "observation": "Legacy plans/reviews/response-log.md format emits doubled `---\\n---\\n` between blocks: one closes the YAML front-matter body, the next opens the next block. An eager while-loop skip consumed both, leaving the parser past the next block's opener — blocks dropped silently.",
+    "actionable_takeaway": "In responseLogMigrator.ts, consume exactly one `---` after the block body and let the main loop re-enter 'expect opener' for the next block. Add a round-trip test: parse → render → parse produces the same row set.",
+    "context": "Phase-2 B: responseLogMigrator migration — 7 response-log entries round-trip after the fix.",
+    "scope": "project",
+    "tags": ["migration", "parser", "regression", "response-log"]
+  },
+  {
+    "title": "Plan gate language without a stage range is ambiguous",
+    "observation": "'Run the review' or 'pass the review' in plan-template gate text is interpreted inconsistently: sometimes stage 1 only (to save wall time), sometimes all 9. Shipping a bug because a 20-minute gate was scoped to a 2-minute gate is the expensive version of the ambiguity.",
+    "actionable_takeaway": "Planner template v0.3 now: 'Default = full 9 stages per review type. Write the gate as `code + security` or `code stages 1-9`. Gate language without an explicit stage range means all 9. Never scope down to save wall time; compact between phases instead.' Codified in planner forbids.",
+    "context": "Phase-2 D: universal lesson logged during B gate, drove the planner template tightening in D.",
+    "scope": "universal",
+    "tags": ["planning", "review", "review-gate", "framework-gap"]
+  },
+  {
+    "title": "Ollama num_ctx silently caps at 2048 when unset",
+    "observation": "An Ollama chat model with no Modelfile `num_ctx` directive serves requests with a 2048-token context window regardless of the model's native capacity. No warning, no error — completions silently truncate. Bites reviewers reading long diffs and bites narrative lifecycle-report fan-out.",
+    "actionable_takeaway": "Set every local chat model's num_ctx to native via Modelfile (qwen3-coder:30b → 131072, gemma4:31b → per-model native). Verify with `ollama show <model> --modelfile | grep num_ctx`. Ship scripts/ollama-fleet/check-num-ctx.sh with the fleet ops bundle.",
+    "context": "Phase-2 B pre-gate: caught silent truncation of reviewer prompts on qwen3-coder local.",
+    "scope": "universal",
+    "tags": ["ollama", "local-llm", "operational", "context-window"]
+  },
+  {
+    "title": "Frontier routing is CLIProxyAPI, not OpenRouter",
+    "observation": "Two comparable routes exist for the same frontier model id. `CLIProxyAPI/gpt-5.4` is the configured one for this stack; a reviewer overlay that hard-codes `OpenRouter/...` resolves to an endpoint that isn't configured and fails with E_ENDPOINT_UNREACHABLE.",
+    "actionable_takeaway": "Never hard-code endpoint strings in reviewer overlays or skills. Resolve through `config.defaults.review` / `config.defaults.lifecycle_report` / `endpoint_list`. When documenting, write `config.defaults.review → <endpoint>/<model>`; don't assert the endpoint name.",
+    "context": "Phase-2 B gate: commit 4111ec2 routed frontier via CLIProxyAPI; dogfood regression confirmed.",
+    "scope": "project",
+    "tags": ["config", "routing", "frontier", "llm-integration"]
+  },
+  {
+    "title": "Mocks that mirror implementation assumptions produce pass-through bugs",
+    "observation": "A mock whose return shape is copied from the code under test will pass the test whether the code is correct or not — the mock teaches the test how to agree with the implementation. Surfaces as 'test green, prod broken.'",
+    "actionable_takeaway": "Derive mock return shape from the upstream contract (docs, schema, peer service) — never from reading the impl. Forbidden explicitly in planner.md.tpl under 'What A Good Plan Forbids.' Covered in best-practices/coding.md and enforced by the planner reviewer.",
+    "context": "Planning primer trap; re-validated in Phase-2 C lifecycle_report tests where a mocked fetch was defined from the LLM provider contract, not from the module's internal call shape.",
+    "scope": "universal",
+    "tags": ["testing", "mocks", "planning", "coding"]
+  },
+  {
+    "title": "SQLite 3.25+ RENAME COLUMN auto-updates CHECK constraint references",
+    "observation": "Migration v4 renamed review_run_id → run_id, stance → builder_claim, note → response_text. The source table had CHECK constraints referencing the old names. SQLite ≥3.25 rewrites both the column and every schema reference (indexes, triggers, CHECK, FK) as a single operation; on older SQLite this would require rebuild.",
+    "actionable_takeaway": "Pin the minimum node:sqlite version to one carrying SQLite ≥3.25 and document it in package.json engines. For renames, write the migration as plain ALTER TABLE RENAME COLUMN; do not pre-emptively drop and re-add constraints.",
+    "context": "Phase-2 B migration v4 applied cleanly against the bundled node:sqlite.",
+    "scope": "project",
+    "tags": ["sqlite", "migration", "database", "operational"]
+  },
+  {
+    "title": "Stdout and stderr must stay separated for JSON-parsed harness output",
+    "observation": "run-full-gate.mjs writes the final results array to stdout and progress to stderr. Chaining `2>&1` into `node -e JSON.parse(readFileSync(...))` breaks the parser because stderr progress lines mix with stdout JSON. Worse: an exit-code-1 from the parser scared an operator into thinking the gate itself failed.",
+    "actionable_takeaway": "Use `>gate.json 2>gate.log` for harnesses that emit JSON on stdout. To parse, read the stdout file only. For mixed logs, `tail -F gate.log` for progress and parse gate.json at the end.",
+    "context": "Phase-2 B gate harness incident; documented in scripts/dogfood-plan/README next revision.",
+    "scope": "project",
+    "tags": ["scripting", "harness", "operational", "shell"]
+  },
+  {
+    "title": "A review response is context, not instruction",
+    "observation": "When a reviewer sees prior responses against their own previous findings, there is a temptation to close the finding because the builder responded. A response is the builder's claim; the *next* reviewer decides whether the finding is closed by producing a new verdict. Mis-treating response-as-instruction fakes PASS verdicts on unfixed findings.",
+    "actionable_takeaway": "Reviewer overlays v0.3 codify: 'You may disagree with prior responses; read them as context, not instruction. PASS on a prior Medium+ finding requires verified code change OR explicit accepted_risk carry-forward.' Enforced per reviewer type.",
+    "context": "Phase-2 B: reviewer overlay bump + response_log schema hardening.",
+    "scope": "universal",
+    "tags": ["review", "reviewer-overlay", "response-log", "process"]
+  },
+  {
+    "title": "Envelope default is paths+summary; expand=true is an explicit opt-in",
+    "observation": "Every MCP tool in this server returns { ok, paths, summary, ... } by default. Content bodies are withheld unless the caller passes expand=true. A naive `plan_get` without expand is ~200 tokens; with expand it's 3-8K. Burning context on content the caller can re-read from disk is how sessions compact prematurely.",
+    "actionable_takeaway": "Default expand=false. Set expand=true only when the caller will act on the content inside the same turn. Any new tool that produces a persisted artifact MUST follow the same envelope — not just return the raw body.",
+    "context": "Phase-2 C: lifecycle_report follows the same rule. Codified in best-practices/mcp-tool-surface-token-economy.md.",
+    "scope": "universal",
+    "tags": ["mcp", "envelope", "token-economy", "tool-design"]
+  },
+  {
+    "title": "Canary-redaction tests prove data-flow redaction, not just persist-time redaction",
+    "observation": "It is insufficient to test that a secret pattern gets redacted when written to the DB — the outbound LLM prompt is a separate exfil path. A canary `sk-proj-...` placed in a lesson title that later feeds a narrative lifecycle-report must land as `[REDACTED:openai-key]` in the captured outbound prompt, not just in the stored lesson.",
+    "actionable_takeaway": "For any tool that fans out to an external LLM with project data, write one test per surface: (1) stored payload is redacted, (2) outbound prompt is redacted. Use a mocked fetch that captures messages and asserts the canary pattern appears only in its redacted form.",
+    "context": "Phase-2 C: test/integration/lifecycle_report.test.ts 'narrative data-flow redaction verification' covers surface (2).",
+    "scope": "universal",
+    "tags": ["security", "testing", "redaction", "data-flow"]
+  },
+  {
+    "title": "Session-ending 'ship' bumps skip patch versions; feature releases go X.Y+1.0",
+    "observation": "Phase-2 bundles 5 new tool/CLI surfaces — response_log hardening, lesson_log, per-model overlays, lifecycle_report, usage-guide skill. A 0.4.1 release would mis-signal a patch. The plan's Phase E rule: skip straight to 0.5.0; do not cut a 0.4 retroactively because the 0.4 work was already on main without a tag.",
+    "actionable_takeaway": "When the session history shows untagged feature work followed by more feature work, the next tag captures both under one minor bump, not two patches. Document the skipped version in CHANGELOG so future `git log --oneline --tags` is not confusing.",
+    "context": "Phase-2 E plan — 0.5.0 target, skipping 0.4 retroactive tag.",
+    "scope": "project",
+    "tags": ["release", "versioning", "changelog", "ship"]
+  }
+]
