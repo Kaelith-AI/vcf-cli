@@ -23,7 +23,8 @@ This project was bootstrapped by the Vibe Coding Framework MCP (`vcf init`).
 - `docs/` — project-specific documentation (not KB)
 - `skills/` — project-specific skill overlays (optional)
 - `backups/` — automated backup snapshots (gitignored)
-- `.vcf/project.db` — per-project SQLite index
+
+Runtime state (SQLite DB, review-run scratch) lives out of tree at `~/.vcf/projects/<slug>/` — the project directory stays clean of VCF-generated files.
 
 ## License
 

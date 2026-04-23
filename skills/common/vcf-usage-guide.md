@@ -27,6 +27,8 @@ Cross-cutting (any step): `lesson_log_add`, `lesson_search`, `decision_log_add`,
 
 Setup / catalog: `project_init`, `project_init_existing`, `project_list`, `portfolio_status`, `portfolio_graph`, `config_get`, `endpoint_list`, `model_list`, `primer_list`, `pack_list`.
 
+**Steps 4 and 5 are a cycle, not a sequence.** The table implies `build → test → review`, but vibe coding runs `build → test → build → test → …` in tight loops within a phase, and only advances to `review` when the phase's test plan is green. Never batch "write all the code, run tests at the end." Each build increment should land small enough that the next `test_execute` produces a signal you can act on in one turn. Compaction boundaries in the plan are the right moments to jump to `review`; inside a phase, stay in the build↔test loop.
+
 ## 3. Prepare / execute pattern
 
 Most lifecycle-advancing tools come in pairs: a **context loader** and a **writer**. Always call the loader first.

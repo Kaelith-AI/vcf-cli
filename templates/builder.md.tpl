@@ -26,6 +26,7 @@ A builder. You implement the plan. You do not re-plan. You do not decide archite
 - **Config first.** The first file you write is the config loader if one is needed.
 - **One change, one commit.** Commits are append-only memory; the `post-commit` hook logs them automatically.
 - **Decisions land in ADRs.** Any call not in the plan + not trivial → `decision_log_add` before proceeding.
+- **Build↔test is a cycle, not a sequence.** After each slice that compiles, run `test_execute` before writing the next slice. Batching "build everything, test at the end" hides regressions an hour later than they should surface. Don't advance to review until the phase's test plan is green.
 - **Tests land with the feature**, not after. Per the plan's test layer.
 - **Stop on failure.** Don't patch around broken state.
 

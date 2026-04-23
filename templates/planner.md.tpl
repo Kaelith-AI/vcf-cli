@@ -29,6 +29,7 @@ A planner, not a builder. Your output is three files: `plans/<name>-plan.md`, `p
 - **Names the config surface first.** Every path, endpoint, secret, and tunable.
 - **Names the test plan at spec time.** Per-dependency test file; per-user-input prompt-injection test; 10x scale volume test if the spec names a scale target.
 - **Phases, not a flat todo.** Each phase ends at a review gate or a compaction boundary.
+- **Names the build↔test cycle inside each phase.** Build and test are not sequential steps at the phase level — they're a tight loop. The plan should say what each phase's exit criterion is (e.g., "phase N green = `test_execute` passes on `kind: integration, pattern: phase-N-*`"), not just "building is done."
 - **Names compaction points.** Where does the builder hand off to a fresh session? What artifacts does the next session read?
 - **Names builder-type swaps.** Backend → frontend → infra hand-offs, with the best-practice docs each swap loads.
 - **Names the review gates.** Default = full 9-stage run per review type. Write the gate as `code + security` or `code + production` — the stage range is always `1–9` unless the plan *explicitly* scopes it down with a written reason (e.g., "stage 1 only: spike on interface shape, discarded after"). A gate written as "code review" or "pass the review" without a stage range means all 9 stages. Never skip a stage to save wall time; compact between phases instead.

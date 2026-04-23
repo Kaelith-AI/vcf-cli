@@ -1,15 +1,17 @@
 # @kaelith-labs/cli
 
-**Status:** alpha. MVP shipped. Not yet published to npm (awaiting tag + NPM_TOKEN).
-
-The **Vibe Coding Framework MCP** — an LLM-agnostic Model Context Protocol server + `vcf` CLI for the vibe-coding lifecycle: **capture → spec → init → plan → build → test → review → ship**. Same workflow, any MCP client (Claude Code today; Codex / Gemini Phase 2).
+The **Vibe Coding Framework MCP** — an LLM-agnostic Model Context Protocol server + `vcf` CLI for the vibe-coding lifecycle: **capture → spec → init → plan → build → test → review → ship**. Same workflow, any MCP client (Claude Code, Codex, or Gemini CLI).
 
 - **Server owns state, files, index, context prep.** Clients own conversation + execution.
 - **Token-economy first**: tools default to `{paths, summary}`; `expand=true` gets content.
 - **Two scopes**: global (idea / spec / project-init / catalog) and project (full lifecycle).
-- **27-stage review subsystem** with carry-forward manifest, stage-entry rules, disposable workspaces.
-- **Primer tag-matching** is deterministic (weighted Jaccard); no embeddings in MVP.
+- **42 MCP tools** across the full lifecycle, including cross-project admin tools (PM role).
+- **27-stage review subsystem** with carry-forward manifest, stage-entry rules, disposable workspaces, and per-model calibration overlays.
+- **Primer tag-matching** is deterministic (weighted Jaccard), with optional embedding-based blending.
+- **Configurable output paths**: all project-tree writes go through `config.outputs.*`; no hardcoded layout.
 - **No hardcoded paths, no ambient network, no auto-update.** Everything through `~/.vcf/config.yaml`.
+
+Current published version on npm: **0.3.2**. Source is at v0.6.2; a new publish is pending.
 
 ---
 
@@ -17,7 +19,7 @@ The **Vibe Coding Framework MCP** — an LLM-agnostic Model Context Protocol ser
 
 ```bash
 # npm (any OS; the primary channel)
-npm install -g @kaelith-labs/cli@alpha
+npm install -g @kaelith-labs/cli
 ```
 
 ```bash
@@ -32,7 +34,7 @@ scoop bucket add kaelith-labs https://github.com/Kaelith-Labs/scoop-vcf
 scoop install vcf-cli
 ```
 
-Two bins land: `vcf` (maintenance CLI) and `vcf-mcp` (stdio MCP server).
+Requires Node >= 22.13. Two bins land: `vcf` (maintenance CLI) and `vcf-mcp` (stdio MCP server).
 
 ## First-run setup
 
@@ -54,7 +56,7 @@ vcf install-skills codex         # → ~/.agents/skills/<name>/SKILL.md  (also r
 vcf install-skills gemini        # → ~/.gemini/commands/<name>.toml    (also read from project-scope .gemini/commands/)
 ```
 
-Copies the 15-skill pack into the client's skills/commands directory. Claude Code and Codex use the open agent-skills `SKILL.md` format; Gemini CLI uses `.toml` custom slash-commands. Re-running is idempotent — existing entries are skipped so your edits aren't clobbered.
+Copies the skill pack (15 lifecycle skills + the `vcf-usage-guide` common skill) into the client's skills/commands directory. Claude Code and Codex use the open agent-skills `SKILL.md` format; Gemini CLI uses `.toml` custom slash-commands. Re-running is idempotent — existing entries are skipped so your edits aren't clobbered.
 
 ## Lifecycle walk-through
 
@@ -220,12 +222,24 @@ vcf register-endpoint \      # append a new LLM endpoint to config.yaml
   --trust-level public \
   --auth-env-var OPENAI_API_KEY
 vcf stale-check              # flag KB entries past review.stale_primer_days
-vcf update-primers           # pull latest @kaelith-labs/kb (warn + skip on conflicts)
+vcf update-primers           # pull latest @kaelith-labs/kb (three-way merge)
 vcf pack add --name <slug> --path <abs>   # register a third-party KB pack
 vcf pack list                # show registered packs
 vcf embed-kb                 # populate embeddings cache (optional)
 vcf admin audit --tool idea_capture --format table
 vcf admin audit --format json --full     # include redacted inputs/outputs JSON
+vcf admin config-history     # forensic log of config file changes per boot
+vcf backup <subset>          # snapshot ~/.vcf/ subsets (projects|global|kb|all)
+vcf restore <archive>        # restore from a backup tarball (conflict-safe)
+vcf migrate 0.3              # automate 0.3.x → 0.5+ state-dir relocation
+vcf lessons reconcile        # drain pending lesson-mirror rows to global DB
+vcf test-trends              # cross-project test-run summary from global DB
+vcf project list             # list registered projects
+vcf project move             # copy/move a project directory (PM scope)
+vcf project rename           # rename a project + state-dir (PM scope)
+vcf project relocate         # re-point root_path without moving files (PM scope)
+vcf project set-role         # designate a project as pm or standard
+vcf lifecycle-report         # structured or narrative project lifecycle snapshot
 ```
 
 These are intentionally not MCP tools. Deterministic maintenance that a human or CI runs should be a CLI command, not a tool that burns tokens on every LLM turn.
@@ -296,9 +310,9 @@ Importable n8n workflows for weekly stale-check, hourly endpoint-health, and wee
 | -------------------------- | ------------------------------------------------- |
 | MCP spec                   | **2025-11-25**                                    |
 | `@modelcontextprotocol/sdk` | **^1.29** (v2 is pre-alpha)                      |
-| Node                       | **≥ 20 LTS**                                      |
+| Node                       | **≥ 22.13** (active LTS through Oct 2027)         |
 | Zod                        | **^4**                                            |
-| Content package            | `@kaelith-labs/kb` peer dep in range `>=0.0.1-alpha <0.2.0` |
+| Content package            | `@kaelith-labs/kb` dep in range `>=0.0.1-alpha <0.2.0` |
 
 ## Non-negotiables (enforced in code, not aspirational)
 
@@ -309,15 +323,12 @@ Importable n8n workflows for weekly stale-check, hourly endpoint-health, and wee
 - Disposable review runs; the stage template is never mutated in place.
 - Stdout is JSON-RPC only in stdio mode; pino logs to stderr (fd 2). ESLint bans `process.stdout` writes to prevent regressions.
 
-## Phase 2 (explicitly out of this MVP)
+## Known gaps / future work
 
-- `ship_release` with plan/confirm → `gh release create` (Phase 2 — the `confirm_token` primitive is already shipped)
-- `test_generate` full per-dependency matrix
-- `vcf update-primers` three-way merge UX
-- Codex CLI + Gemini CLI skill packs
-- Local-LLM review backend (Ollama / Gemma / Qwen-coder) with per-stage routing
-- Brew formula + Scoop manifest
-- Embedding-based primer selection
+- `ship_release` plan/confirm step — `gh release create` runs but the plan/confirm wrapper (`confirm_token`) has not landed as a formal tool flow.
+- Per-project `lessons.mirror_policy` override (currently global-only).
+- Codex CLI and Gemini CLI native-protocol adapters for `review_execute` (OpenAI-compatible shape covers Ollama / LiteLLM / OpenRouter today).
+- `vcf project scan` is obsolete since 0.5.0 and will be removed in a future release; use `vcf adopt <path>` instead.
 
 ## License
 
@@ -325,5 +336,6 @@ Apache-2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
 ## Links
 
+- Umbrella project: [../README.md](../README.md)
 - KB: [github.com/Kaelith-Labs/vcf-kb](https://github.com/Kaelith-Labs/vcf-kb)
 - CHANGELOG: [./CHANGELOG.md](./CHANGELOG.md)
