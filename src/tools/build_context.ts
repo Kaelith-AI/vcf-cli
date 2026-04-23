@@ -14,6 +14,7 @@ import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { readTemplate } from "../util/templates.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
+import { resolveOutputs } from "../util/outputs.js";
 import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
 import { loadKbCached } from "../primers/load.js";
@@ -64,10 +65,11 @@ export function registerBuildContext(server: McpServer, deps: ServerDeps): void 
 
           // Read plan files (tolerate missing — a user may call build_context
           // before plan_save for exploration).
+          const outputs = resolveOutputs(root, deps.config);
           const planPaths = {
-            plan: join(root, "plans", `${parsed.plan_name}-plan.md`),
-            todo: join(root, "plans", `${parsed.plan_name}-todo.md`),
-            manifest: join(root, "plans", `${parsed.plan_name}-manifest.md`),
+            plan: join(outputs.plansDir, `${parsed.plan_name}-plan.md`),
+            todo: join(outputs.plansDir, `${parsed.plan_name}-todo.md`),
+            manifest: join(outputs.plansDir, `${parsed.plan_name}-manifest.md`),
           };
           const planBodies: Record<string, string | null> = {};
           for (const [k, p] of Object.entries(planPaths)) {
@@ -78,7 +80,7 @@ export function registerBuildContext(server: McpServer, deps: ServerDeps): void 
           // Read decision log entries + response log so the builder doesn't
           // re-open resolved items.
           const decisions = readDecisions(deps);
-          const responseLogPath = join(root, "plans", "reviews", "response-log.md");
+          const responseLogPath = outputs.responseLogPath;
           const responseLog = existsSync(responseLogPath)
             ? await readFile(responseLogPath, "utf8")
             : null;

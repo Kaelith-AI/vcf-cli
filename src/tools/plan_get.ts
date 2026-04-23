@@ -11,6 +11,7 @@ import { existsSync } from "node:fs";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
+import { resolveOutputs } from "../util/outputs.js";
 import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
 
@@ -46,10 +47,11 @@ export function registerPlanGet(server: McpServer, deps: ServerDeps): void {
             | undefined;
           if (!row) throw new McpError("E_STATE_INVALID", "project row missing");
 
+          const plansDir = resolveOutputs(row.root_path, deps.config).plansDir;
           const paths = {
-            plan_md: join(row.root_path, "plans", `${parsed.name}-plan.md`),
-            todo_md: join(row.root_path, "plans", `${parsed.name}-todo.md`),
-            manifest_md: join(row.root_path, "plans", `${parsed.name}-manifest.md`),
+            plan_md: join(plansDir, `${parsed.name}-plan.md`),
+            todo_md: join(plansDir, `${parsed.name}-todo.md`),
+            manifest_md: join(plansDir, `${parsed.name}-manifest.md`),
           };
 
           const found: string[] = [];

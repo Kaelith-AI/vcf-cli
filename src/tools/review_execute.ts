@@ -35,6 +35,7 @@ import { writeAudit, redact } from "../util/audit.js";
 import { McpError } from "../errors.js";
 import { callChatCompletion, LlmError, type ChatMessage } from "../util/llmClient.js";
 import { persistReviewSubmission, type ReviewRunRow } from "../review/submitCore.js";
+import { resolveOutputs } from "../util/outputs.js";
 import { readOverlayBundle, type ReviewType } from "../review/overlays.js";
 import { projectRunsDir } from "../project/stateDir.js";
 import { composeMessages, parseSubmission } from "../review/prompt.js";
@@ -194,10 +195,11 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
           // Parse structured verdict from the response.
           const submission = parseSubmission(content);
 
+          const outputs = resolveOutputs(root, deps.config);
           const { reportPath, merged } = await persistReviewSubmission({
             projectDb: deps.projectDb,
             allowedRoots: deps.config.workspace.allowed_roots,
-            projectRoot: root,
+            reviewsDir: outputs.reviewsDir,
             runDir,
             run,
             submission,

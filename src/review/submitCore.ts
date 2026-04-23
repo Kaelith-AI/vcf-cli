@@ -59,8 +59,13 @@ export interface ReviewRunRow {
 export interface PersistArgs {
   projectDb: DatabaseType;
   allowedRoots: readonly string[];
-  /** In-tree path for the final committed review report (plans/reviews/<type>/). */
-  projectRoot: string;
+  /**
+   * Configured reviews-root (absolute, already resolved via
+   * resolveOutputs). Type-scoped subdir (`<reviewsDir>/<type>/`) is
+   * created below. Caller looks this up once from
+   * `resolveOutputs(projectRoot, config).reviewsDir`.
+   */
+  reviewsDir: string;
   /**
    * Out-of-tree run workspace (~/.vcf/projects/<slug>/review-runs/<run-id>/),
    * where the carry-forward YAML is rewritten so the next prepare can pick up
@@ -78,7 +83,7 @@ export interface PersistResult {
 }
 
 export async function persistReviewSubmission(args: PersistArgs): Promise<PersistResult> {
-  const { projectDb, allowedRoots, projectRoot, runDir, run, submission } = args;
+  const { projectDb, allowedRoots, reviewsDir, runDir, run, submission } = args;
 
   if (run.status !== "pending" && run.status !== "running") {
     throw new McpError("E_STATE_INVALID", `review run "${run.id}" is ${run.status}; cannot submit`);
@@ -88,7 +93,7 @@ export async function persistReviewSubmission(args: PersistArgs): Promise<Persis
   const next = groupCarryForward(submission.carry_forward, run.stage);
   const merged = mergeCarryForward(prior, next);
 
-  const reportsDir = join(projectRoot, "plans", "reviews", run.type);
+  const reportsDir = join(reviewsDir, run.type);
   await assertInsideAllowedRoot(reportsDir, allowedRoots);
   await mkdir(reportsDir, { recursive: true });
   const now = Date.now();

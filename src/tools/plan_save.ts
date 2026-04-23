@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
+import { resolveOutputs } from "../util/outputs.js";
 import { writeAudit } from "../util/audit.js";
 import { setProjectDependsOn, setProjectState } from "../util/projectRegistry.js";
 import { McpError } from "../errors.js";
@@ -68,7 +69,7 @@ export function registerPlanSave(server: McpServer, deps: ServerDeps): void {
           if (!projectRoot) {
             throw new McpError("E_STATE_INVALID", "project row missing; re-run vcf init");
           }
-          const plansDir = join(projectRoot, "plans");
+          const plansDir = resolveOutputs(projectRoot, deps.config).plansDir;
           await assertInsideAllowedRoot(plansDir, deps.config.workspace.allowed_roots);
           await mkdir(plansDir, { recursive: true });
 

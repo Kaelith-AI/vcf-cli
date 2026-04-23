@@ -19,6 +19,7 @@ import { runTool, success } from "../envelope.js";
 import { readTemplate } from "../util/templates.js";
 import { writeAudit } from "../util/audit.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
+import { resolveOutputs } from "../util/outputs.js";
 import { McpError } from "../errors.js";
 import { loadKbCached } from "../primers/load.js";
 import { matchPrimers } from "../primers/match.js";
@@ -173,10 +174,11 @@ async function readOptionalKbFile(deps: ServerDeps, rel: string): Promise<string
 
 function planOutputPaths(deps: ServerDeps, name: string): Record<string, string> {
   const root = readProjectRootPath(deps) ?? ".";
+  const plansDir = resolveOutputs(root, deps.config).plansDir;
   return {
-    plan_md: join(root, "plans", `${name}-plan.md`),
-    todo_md: join(root, "plans", `${name}-todo.md`),
-    manifest_md: join(root, "plans", `${name}-manifest.md`),
+    plan_md: join(plansDir, `${name}-plan.md`),
+    todo_md: join(plansDir, `${name}-todo.md`),
+    manifest_md: join(plansDir, `${name}-manifest.md`),
   };
 }
 

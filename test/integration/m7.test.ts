@@ -295,6 +295,75 @@ describe("M7 review subsystem (project scope)", () => {
     expect(body).toMatch(/## Carry-forward/);
   });
 
+  it("review_submit honors config.outputs.reviews_dir override", async () => {
+    // Override lands reports under <projectDir>/custom-reviews/<type>/ instead
+    // of the default plans/reviews/<type>/.
+    const config = ConfigSchema.parse({
+      version: 1,
+      workspace: {
+        allowed_roots: [workRoot],
+        ideas_dir: join(workRoot, "ideas"),
+        specs_dir: join(workRoot, "specs"),
+      },
+      endpoints: [
+        {
+          name: "local-stub",
+          provider: "local-stub",
+          base_url: "http://127.0.0.1:1",
+          trust_level: "local",
+        },
+      ],
+      kb: { root: kbRoot },
+      outputs: { reviews_dir: "custom-reviews" },
+    });
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf-o.db") });
+    const pdbPath = join(projectDir, ".vcf", "project-o.db");
+    const projectDb = openProjectDb({ path: pdbPath });
+    const now = Date.now();
+    projectDb
+      .prepare(
+        `INSERT INTO project (id, name, root_path, state, created_at, updated_at)
+         VALUES (1, 'Demo', ?, 'building', ?, ?)`,
+      )
+      .run(projectDir, now, now);
+    const resolved: ResolvedScope = {
+      scope: "project",
+      projectRoot: projectDir,
+      projectSlug: "test-project-o",
+      projectDbPath: pdbPath,
+    };
+    const server = createServer({ scope: "project", resolved, config, globalDb, projectDb, homeDir: home });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const client = new Client({ name: "t2", version: "0" }, { capabilities: {} });
+    await client.connect(b);
+
+    const prep = parseResult(
+      await client.callTool({
+        name: "review_prepare",
+        arguments: { type: "code", stage: 1, expand: true },
+      }),
+    );
+    const runId = (prep.content as { run_id: string }).run_id;
+    const sub = parseResult(
+      await client.callTool({
+        name: "review_submit",
+        arguments: {
+          run_id: runId,
+          verdict: "PASS",
+          summary: "override-landing check",
+          findings: [],
+          carry_forward: [],
+          expand: true,
+        },
+      }),
+    );
+    expect(sub.ok).toBe(true);
+    const reportPath = (sub.content as { report_path: string }).report_path;
+    expect(reportPath).toMatch(/\/custom-reviews\/code\/stage-1-/);
+    expect(reportPath).not.toMatch(/\/plans\/reviews\//);
+  });
+
   it("review_submit with unknown run_id returns E_NOT_FOUND", async () => {
     const { client } = await connectProject();
     const env = parseResult(

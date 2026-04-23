@@ -13,6 +13,7 @@ import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { slugify, isoDate } from "../util/slug.js";
+import { resolveOutputs } from "../util/outputs.js";
 import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
 
@@ -66,7 +67,7 @@ export function registerDecisionLogAdd(server: McpServer, deps: ServerDeps): voi
 
           const date = isoDate();
           const slug = slugify(parsed.title);
-          const dir = join(root, "plans", "decisions");
+          const dir = resolveOutputs(root, deps.config).decisionsDir;
           await assertInsideAllowedRoot(dir, deps.config.workspace.allowed_roots);
           await mkdir(dir, { recursive: true });
           const filename = `${date}-${slug}.md`;

@@ -10,6 +10,49 @@ _No unreleased changes yet._
 
 ---
 
+## [0.6.2] — 2026-04-23
+
+Clarifies the project-tree vs server-state boundary and makes every
+project-tree output location configurable.
+
+### Added
+
+- **`config.outputs.*` (new block)** — one configurable location per
+  artifact kind the MCP server writes into a project. Defaults preserve
+  the pre-0.6.2 layout (`plans/`, `plans/decisions/`, `plans/reviews/`,
+  `plans/reviews/response-log.md`, `plans/lifecycle-report.md/.json`,
+  `memory/daily-logs/`, `docs/`, `skills/`, `backups/`, all relative to
+  the registered `project_root`). Absolute paths override per-kind for
+  e.g. a company-wide decision log on shared storage. New helper
+  `src/util/outputs.ts:resolveOutputs(projectRoot, config)` is the single
+  contact surface every writer goes through.
+- **Operator config** — `~/.vcf/config.yaml` gets a documented
+  `outputs:` block via `vcf init` seed template. Existing installs
+  continue to work with defaults without editing the file.
+
+### Changed
+
+- **Every tool that writes project-tree output now reads from
+  `config.outputs`** — `plan_save`, `plan_get`, `plan_context`,
+  `build_context`, `decision_log_add`, `response_log_add`,
+  `review_submit` + `review_execute` (via `persistReviewSubmission`),
+  `lifecycle_report`, `project_init` scaffold. No hardcoded `plans/` /
+  `plans/reviews/` strings remain in the write paths.
+- **`persistReviewSubmission` signature** — takes `reviewsDir: string`
+  instead of `projectRoot: string`. Callers look up via `resolveOutputs`.
+  Internal contract; no external surface change.
+
+### Fixed
+
+- **Project evidence stranded in `vcf-cli/`** (separate commit on top).
+  After the 0.5.0 parent-adoption, review reports + response-log + plan
+  docs + specs from the earlier subdir-adoption era sat at
+  `vcf-cli/plans/` instead of the project root. Relocated to the
+  registered `project_root`; the `vcf-cli/` component no longer carries
+  project-output files.
+
+---
+
 ## [0.6.1] — 2026-04-23
 
 Followup backlog sweep — a batch of correctness, refactor, and light-feature

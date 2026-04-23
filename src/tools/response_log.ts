@@ -13,13 +13,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname } from "node:path";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
 import { renderResponseLogMarkdown } from "../review/responseLogMigrator.js";
+import { resolveOutputs } from "../util/outputs.js";
 
 const ResponseLogAddInput = z
   .object({
@@ -72,11 +73,9 @@ export function registerResponseLogAdd(server: McpServer, deps: ServerDeps): voi
           const root = readProjectRoot(deps);
           if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 
-          const dir = join(root, "plans", "reviews");
-          await assertInsideAllowedRoot(dir, deps.config.workspace.allowed_roots);
-          await mkdir(dir, { recursive: true });
-          const logPath = join(dir, "response-log.md");
+          const logPath = resolveOutputs(root, deps.config).responseLogPath;
           await assertInsideAllowedRoot(logPath, deps.config.workspace.allowed_roots);
+          await mkdir(dirname(logPath), { recursive: true });
 
           const insert = deps.projectDb.prepare(
             `INSERT INTO response_log

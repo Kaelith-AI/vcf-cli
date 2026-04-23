@@ -30,6 +30,7 @@ import { z } from "zod";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
+import { resolveOutputs } from "../util/outputs.js";
 import { slugify, isoDate } from "../util/slug.js";
 import { readTemplate, renderTemplate, templatesDir } from "../util/templates.js";
 import { openProjectDb } from "../db/project.js";
@@ -68,11 +69,14 @@ const ProjectInitInput = z
 
 type ProjectInitArgs = z.infer<typeof ProjectInitInput>;
 
-const SUBDIRS = [
+// Legacy subdir list — kept for documentation. Actual scaffolding reads
+// `config.outputs.<kind>_dir` via {@link resolveOutputs} so operators can
+// relocate any artifact kind without code changes.
+const SCAFFOLDED_OUTPUT_KINDS = [
   "plans",
-  "plans/decisions",
-  "plans/reviews",
-  "memory/daily-logs",
+  "decisions",
+  "reviews",
+  "memory",
   "docs",
   "skills",
   "backups",
@@ -117,7 +121,22 @@ export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
           const written: string[] = [];
           const skipped: string[] = [];
 
-          for (const sub of SUBDIRS) await mkdir(join(target, sub), { recursive: true });
+          // Scaffold output dirs from config.outputs so operators can
+          // relocate any artifact kind without rebuilding the scaffolder.
+          // Default values reproduce the pre-0.6.2 layout.
+          const scaffoldOutputs = resolveOutputs(target, deps.config);
+          for (const dir of [
+            scaffoldOutputs.plansDir,
+            scaffoldOutputs.decisionsDir,
+            scaffoldOutputs.reviewsDir,
+            scaffoldOutputs.memoryDir,
+            scaffoldOutputs.docsDir,
+            scaffoldOutputs.skillsDir,
+            scaffoldOutputs.backupsDir,
+          ]) {
+            await mkdir(dir, { recursive: true });
+          }
+          void SCAFFOLDED_OUTPUT_KINDS; // doc-only reference
 
           const projectSlug = slugify(parsed.name);
           const createdDate = isoDate();
@@ -158,7 +177,7 @@ export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
           }
 
           // Today's daily log.
-          const dailyLogPath = join(target, "memory", "daily-logs", `${createdDate}.md`);
+          const dailyLogPath = join(scaffoldOutputs.memoryDir, `${createdDate}.md`);
           if (!existsSync(dailyLogPath)) {
             await writeFile(
               dailyLogPath,
@@ -174,7 +193,7 @@ export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
           if (parsed.spec_path) {
             const specSrc = resolvePath(parsed.spec_path);
             await assertInsideAllowedRoot(specSrc, deps.config.workspace.allowed_roots);
-            const specDst = join(target, "plans", `${projectSlug}-spec.md`);
+            const specDst = join(scaffoldOutputs.plansDir, `${projectSlug}-spec.md`);
             if (!existsSync(specDst)) {
               const content = await readFile(specSrc, "utf8");
               await writeFile(specDst, content, "utf8");

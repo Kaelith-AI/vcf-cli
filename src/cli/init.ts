@@ -98,6 +98,20 @@ export async function runInit(opts: { telemetry?: boolean } = {}): Promise<void>
       "#   research_verify: { endpoint: local-ollama, model: gemma-4-12b }",
       "#   stress_test: { endpoint: local-ollama, model: gemma-4-12b }",
       "",
+      "# Optional: relocate any project-tree artifact kind. Values are",
+      "# relative to the registered project_root by default; absolute paths",
+      "# pass through. Omit to accept defaults (shown below).",
+      "# outputs:",
+      "#   plans_dir: plans",
+      "#   decisions_dir: plans/decisions",
+      "#   reviews_dir: plans/reviews",
+      "#   response_log_path: plans/reviews/response-log.md",
+      "#   lifecycle_report_dir: plans",
+      "#   memory_dir: memory/daily-logs",
+      "#   docs_dir: docs",
+      "#   skills_dir: skills",
+      "#   backups_dir: backups",
+      "",
     ].join("\n");
     await writeFile(cfgPath, seed, "utf8");
     log(`wrote ${cfgPath}`);

@@ -28,6 +28,7 @@ import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { writeAudit, redact } from "../util/audit.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
+import { resolveOutputs } from "../util/outputs.js";
 import { McpError } from "../errors.js";
 import { callChatCompletion, LlmError, type ChatMessage } from "../util/llmClient.js";
 import {
@@ -93,7 +94,7 @@ export function registerLifecycleReport(server: McpServer, deps: ServerDeps): vo
             recentCap: deps.config.report.recent_rows_per_section,
           });
 
-          const outDir = join(root, "plans");
+          const outDir = resolveOutputs(root, deps.config).lifecycleReportDir;
           await assertInsideAllowedRoot(outDir, deps.config.workspace.allowed_roots);
           await mkdir(outDir, { recursive: true });
           const jsonPath = join(outDir, "lifecycle-report.json");

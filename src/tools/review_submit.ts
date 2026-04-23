@@ -19,6 +19,7 @@ import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
 import { CARRY_FORWARD_SECTIONS, type CarryForwardSection } from "../review/carryForward.js";
 import { persistReviewSubmission, VERDICTS, type ReviewRunRow } from "../review/submitCore.js";
+import { resolveOutputs } from "../util/outputs.js";
 import { projectRunsDir } from "../project/stateDir.js";
 import { join } from "node:path";
 
@@ -89,10 +90,11 @@ export function registerReviewSubmit(server: McpServer, deps: ServerDeps): void 
             );
           }
           const runDir = join(projectRunsDir(slug, deps.homeDir), run.id);
+          const outputs = resolveOutputs(root, deps.config);
           const { reportPath, merged } = await persistReviewSubmission({
             projectDb: deps.projectDb,
             allowedRoots: deps.config.workspace.allowed_roots,
-            projectRoot: root,
+            reviewsDir: outputs.reviewsDir,
             runDir,
             run,
             submission: {

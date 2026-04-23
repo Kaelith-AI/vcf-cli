@@ -281,6 +281,30 @@ export type Defaults = z.infer<typeof DefaultsSchema>;
 
 // ---- Lessons (project + global self-improvement log) -----------------------
 
+// ---- Outputs (configurable per-project artifact locations) -----------------
+//
+// Every project-tree artifact the MCP server writes lands under one of
+// these keys. Defaults keep the pre-0.6.2 layout — each subdir relative
+// to the registered project_root — so upgrading doesn't force a config
+// change. Absolute paths override the default per-project routing (e.g.
+// to point a company-wide decision log at a shared drive).
+
+export const OutputsSchema = z
+  .object({
+    plans_dir: z.string().min(1).max(512).default("plans"),
+    decisions_dir: z.string().min(1).max(512).default("plans/decisions"),
+    reviews_dir: z.string().min(1).max(512).default("plans/reviews"),
+    response_log_path: z.string().min(1).max(512).default("plans/reviews/response-log.md"),
+    lifecycle_report_dir: z.string().min(1).max(512).default("plans"),
+    memory_dir: z.string().min(1).max(512).default("memory/daily-logs"),
+    docs_dir: z.string().min(1).max(512).default("docs"),
+    skills_dir: z.string().min(1).max(512).default("skills"),
+    backups_dir: z.string().min(1).max(512).default("backups"),
+  })
+  .strict();
+
+export type Outputs = z.infer<typeof OutputsSchema>;
+
 export const LessonsSchema = z
   .object({
     // Absolute path to the global lessons DB. `~` and `${ENV_VAR}` are
@@ -381,6 +405,17 @@ export const ConfigSchema = z
     embeddings: EmbeddingsSchema.optional(),
     defaults: DefaultsSchema.optional(),
     lessons: LessonsSchema.default({ default_scope: "project", mirror_policy: "write-and-read" }),
+    outputs: OutputsSchema.default({
+      plans_dir: "plans",
+      decisions_dir: "plans/decisions",
+      reviews_dir: "plans/reviews",
+      response_log_path: "plans/reviews/response-log.md",
+      lifecycle_report_dir: "plans",
+      memory_dir: "memory/daily-logs",
+      docs_dir: "docs",
+      skills_dir: "skills",
+      backups_dir: "backups",
+    }),
     report: ReportSchema.default({
       audit_rows_per_section: 500,
       recent_rows_per_section: 50,
