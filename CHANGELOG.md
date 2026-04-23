@@ -45,6 +45,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- **Model matrix review harness (#33).** `scripts/stress/review-matrix/run.mjs`
+  generalizes the dual-model dogfood script to N models. Runs the 27-stage
+  review (3 types × 9 stages) against every configured `(endpoint, model)`
+  tuple, writes per-stage matrix rows (md + json), clusters verdicts, flags
+  outliers, and fingerprints findings as sorted `<severity>@<file>:<line>`
+  tuples so agreement clusters surface even when verbatim prose differs.
+  Configurable via env vars: `VCF_MATRIX_DIFF_REF`, `VCF_MATRIX_TYPES`,
+  `VCF_MATRIX_STAGES`.
 - **project_init_existing `strict` + `reconstruct` adoption modes (#20).**
   `bypass` (default) stays unchanged. `strict` refuses to adopt unless the
   project already has a spec, a plan, and a manifest — the registry stays
