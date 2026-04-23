@@ -173,15 +173,23 @@ export function registerReviewPrepare(server: McpServer, deps: ServerDeps): void
             try {
               const git = simpleGit({ baseDir: root });
               const diffArgs: string[] = [parsed.diff_ref];
+              const excludes: string[] = [];
               if (!parsed.include_review_output) {
-                diffArgs.push(
-                  "--",
-                  ".",
-                  ":(exclude)plans/reviews",
-                  ":(exclude)plans/lifecycle-report.md",
-                  ":(exclude)plans/lifecycle-report.json",
-                  ":(exclude).review-runs",
+                excludes.push(
+                  "plans/reviews",
+                  "plans/lifecycle-report.md",
+                  "plans/lifecycle-report.json",
+                  ".review-runs",
                 );
+              }
+              // Followup #38: append operator-configured diff_exclude
+              // patterns (package-lock.json, dist/**, …). Keeps the diff
+              // focused on reviewable human-authored code; preserves
+              // reviewer-prompt token headroom.
+              for (const pat of deps.config.review.diff_exclude) excludes.push(pat);
+              if (excludes.length > 0) {
+                diffArgs.push("--", ".");
+                for (const pat of excludes) diffArgs.push(`:(exclude)${pat}`);
               }
               const diff = await git.diff(diffArgs);
               diffPath = join(runDir, "scoped-diff.patch");

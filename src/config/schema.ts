@@ -157,6 +157,32 @@ export type KnowledgeBase = z.infer<typeof KnowledgeBaseSchema>;
 
 // ---- Review -----------------------------------------------------------------
 
+// Followup #38 — preserve reviewer-prompt headroom by pre-filtering the
+// scoped diff. Entries are gitignore-style pathspecs; `review_prepare`
+// forwards each as a `:(exclude)<pattern>` arg to `git diff`, so any
+// pattern git's pathspec accepts works. Defaults cover the noisy-but-
+// useless-to-review cases (lockfiles, build output, minified bundles)
+// that otherwise burn 10-50K prompt tokens per stage run.
+export const REVIEW_DIFF_EXCLUDE_DEFAULTS: string[] = [
+  "package-lock.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "Cargo.lock",
+  "poetry.lock",
+  "Gemfile.lock",
+  "composer.lock",
+  "*.min.js",
+  "*.min.css",
+  "*.map",
+  "dist/**",
+  "build/**",
+  "**/node_modules/**",
+  "**/__pycache__/**",
+  "**/vendor/**",
+  "**/.turbo/**",
+  "**/.next/**",
+];
+
 export const ReviewSchema = z
   .object({
     // MVP ships code / security / production. Users may add categories; the
@@ -169,6 +195,14 @@ export const ReviewSchema = z
     auto_advance_on_pass: z.boolean().default(true),
     // Stale-primer threshold in days; read by `vcf stale-check`.
     stale_primer_days: z.number().int().positive().max(3650).default(180),
+    // Followup #38: diff pre-filter. See REVIEW_DIFF_EXCLUDE_DEFAULTS
+    // for the seed list. Operators extend (or override with []) as
+    // needed; review_prepare treats each entry as a git pathspec
+    // passed via `:(exclude)<pattern>`.
+    diff_exclude: z
+      .array(z.string().min(1).max(512))
+      .max(128)
+      .default(REVIEW_DIFF_EXCLUDE_DEFAULTS),
   })
   .strict();
 
@@ -331,6 +365,7 @@ export const ConfigSchema = z
       categories: ["code", "security", "production"],
       auto_advance_on_pass: true,
       stale_primer_days: 180,
+      diff_exclude: REVIEW_DIFF_EXCLUDE_DEFAULTS,
     }),
     // Route everything we can to local endpoints first when true; spec § 5
     // non-negotiable, see "Local-model preference".

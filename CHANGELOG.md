@@ -11,6 +11,14 @@ work across 11 items from `plans/2026-04-20-followups.md`.
 
 ### Added
 
+- **`review.diff_exclude` config + defaults (followup #38, partial).**
+  `review_prepare` now forwards each pathspec as `:(exclude)<pattern>`
+  to `git diff`, dropping lockfiles / `dist/**` / `build/**` /
+  `node_modules/**` / minified bundles / sourcemaps from the scoped
+  diff. Single biggest reviewer-prompt headroom win without touching
+  stage files. Operators set `diff_exclude: []` to disable or extend
+  per-project. (Options #1 fan-out, #2 stage-file slim, #4 streaming
+  carry-forward still open.)
 - **`config.lessons.mirror_policy` (followup #41).** New enum
   `write-and-read | write-only | read-only | off`. `write-only` lets a
   project contribute to the cross-project lessons mirror without letting
