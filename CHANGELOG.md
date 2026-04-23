@@ -45,6 +45,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- **Test-surface tools (#12, #13, #14).** Three new MCP tools shipped
+  together under the test-lifecycle surface:
+  - **`test_add_missing_case` (#12):** LLM-driven. Given the current plan +
+    manifest + existing test files, returns a scaffolding prompt that walks
+    the calling LLM through identifying test cases the manifest promises
+    but the tests don't cover. Prompts for `test_for_lesson: <slug>`
+    frontmatter when the case came from a lesson_log entry — closes the
+    loop from "we learned X" to "X is guarded in CI."
+  - **`conformance_check` (#13):** deterministic. Reads the plan's
+    manifest + decisions and asserts reality matches — flags manifest
+    files that don't exist (blocker), decisions marked accepted but
+    superseded with a dangling reference (warning), and optionally
+    empty files (info). No LLM; fast enough for pre-commit.
+  - **`vibe_check` (#14):** deterministic. Regex sweep for vibe-coding
+    anti-patterns: bare TODO/HACK/FIXME without ticket references,
+    `.catch(() => {})`, `as any`, `@ts-ignore`, empty catch blocks,
+    `await` inside `.forEach()`. Pure regex + file-walk; no LLM. Six
+    default rules, scopable via the `rules` arg. Integration tests
+    cover all three tools end-to-end.
 - **SEA (single executable applications) build infrastructure (#8).** New
   `sea-config.json` + `scripts/build-sea.mjs` + `npm run build:sea` produce
   a standalone per-platform binary (`vcf-cli-<os>-<arch>[.exe]`) with the
