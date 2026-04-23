@@ -28,6 +28,10 @@ export const ERROR_CODES = {
   E_CANCELED: { retryable: true, description: "tool run canceled by the client" },
   E_ENDPOINT_UNREACHABLE: { retryable: true, description: "configured endpoint did not respond" },
   E_UNWRITABLE: { retryable: false, description: "target path is not writable" },
+  E_FILESYSTEM: {
+    retryable: true,
+    description: "filesystem operation (copy / rename / delete) failed",
+  },
   E_CONFIRM_REQUIRED: {
     retryable: true,
     description: "destructive action needs a valid confirm_token",

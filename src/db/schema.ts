@@ -118,6 +118,20 @@ export const GLOBAL_MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_projects_root ON projects(root_path);
     `,
   },
+  {
+    version: 4,
+    name: "project_role",
+    up: `
+      -- Phase F: project admin role. A project marked 'pm' gets the
+      -- cross-project admin tool surface (project_move, project_rename,
+      -- project_relocate) registered in its MCP sessions. Default
+      -- 'standard' preserves prior behavior for every existing row.
+      ALTER TABLE projects
+        ADD COLUMN role TEXT NOT NULL DEFAULT 'standard'
+          CHECK (role IN ('standard', 'pm'));
+      CREATE INDEX IF NOT EXISTS idx_projects_role ON projects(role);
+    `,
+  },
 ];
 
 export const PROJECT_MIGRATIONS: Migration[] = [

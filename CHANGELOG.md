@@ -6,7 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## Unreleased
 
-_No unreleased changes yet._
+**Phase F — cross-project admin surfaces + PM (admin) project concept.**
+Operator-requested feature set building on the 0.5.0 out-of-tree layout:
+move a project's directory, rename it, or re-point its registry
+`root_path`, all from a project designated as PM ("admin").
+
+### Added
+
+- **`moveProject` core + `project_move` MCP tool + `vcf project move` CLI** —
+  copy or move a registered project's directory to a new path, updating
+  the global registry + project.db `root_path` atomically. Copy-then-commit
+  pattern rolls back the copy on DB failure. `mode: "copy" | "move"`
+  controls post-copy source delete. Target must live inside
+  `workspace.allowed_roots`. PM-only MCP tool; CLI works from any project.
+- **`renameProject` core + `project_rename` MCP tool + `vcf project rename` CLI** —
+  change a project's display name. The slug derived from the new name
+  keys the state-dir under `~/.vcf/projects/`, so this also renames the
+  state-dir (atomic, with rollback on DB failure). `root_path` is NOT
+  touched. PM-only MCP tool.
+- **`relocateProject` core + `project_relocate` MCP tool + `vcf project relocate` CLI** —
+  re-point a project's registered `root_path` WITHOUT moving files. For
+  the "I cloned into a different folder" case. Closes followup #43.
+  PM-only MCP tool.
+- **`setProjectRole` registry helper + `project_set_role` MCP tool +
+  `vcf project set-role` CLI** — designate a project as `pm` or revert
+  to `standard`. PM elevation unlocks the cross-project admin tool
+  surface inside that project's MCP sessions. Multiple PMs are allowed.
+- **`ResolvedScope.projectRole`** — populated from the global registry at
+  scope resolution time. Drives the PM-tool registration gate in
+  `src/server.ts`.
+- **`E_FILESYSTEM` error code** — surfaced by move/rename when a copy,
+  rename, or delete fails. Retryable so clients know a second attempt
+  may succeed (transient filesystem errors).
+
+### Schema
+
+- **Global DB migration v4** — `projects.role TEXT NOT NULL DEFAULT
+  'standard' CHECK (role IN ('standard', 'pm'))` + index. Purely
+  additive; every existing row gets `role='standard'` via the default.
+  No operator action required.
+
+### MCP compatibility
+
+- MCP spec `2025-11-25`. `@modelcontextprotocol/sdk ^1.29`. Node `>=22.13`.
+- **38 → 42 MCP tools.** New since v0.5.0:
+  - `project_set_role` (global scope) — set/revoke PM role.
+  - `project_move` (project scope, PM-only) — copy/move a project's directory.
+  - `project_rename` (project scope, PM-only) — rename a project + state-dir.
+  - `project_relocate` (project scope, PM-only) — re-point `root_path` without
+    moving files.
 
 ---
 

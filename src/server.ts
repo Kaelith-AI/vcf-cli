@@ -51,6 +51,10 @@ import { registerReviewHistory } from "./tools/review_history.js";
 import { registerShipAudit } from "./tools/ship_audit.js";
 import { registerShipBuild } from "./tools/ship_build.js";
 import { registerShipRelease } from "./tools/ship_release.js";
+import { registerProjectMove } from "./tools/project_move.js";
+import { registerProjectRename } from "./tools/project_rename.js";
+import { registerProjectRelocate } from "./tools/project_relocate.js";
+import { registerProjectSetRole } from "./tools/project_set_role.js";
 import {
   registerConfigGet,
   registerEndpointList,
@@ -168,6 +172,9 @@ export function createServer(deps: ServerDeps): McpServer {
     // Project bootstrap
     registerProjectInit(server, deps);
     registerProjectInitExisting(server, deps);
+    // Cross-project admin: role assignment lives at global scope because
+    // it's a meta-operation on the registry itself, not on any one project.
+    registerProjectSetRole(server, deps);
   } else {
     // Project scope owns the full lifecycle.
     registerPortfolioStatus(server, deps);
@@ -192,6 +199,13 @@ export function createServer(deps: ServerDeps): McpServer {
     registerShipAudit(server, deps);
     registerShipBuild(server, deps);
     registerShipRelease(server, deps);
+    // PM-only admin tools: registered when the current project carries
+    // role='pm' in the global registry. Non-PM sessions never see these.
+    if (deps.resolved.projectRole === "pm") {
+      registerProjectMove(server, deps);
+      registerProjectRename(server, deps);
+      registerProjectRelocate(server, deps);
+    }
   }
 
   // Catalog (read-only) — available under both scopes; context is cheap and

@@ -34,6 +34,8 @@ export interface ResolveScopeInput {
   homeDir?: string;
 }
 
+export type ProjectRole = "standard" | "pm";
+
 export interface ResolvedScope {
   scope: Scope;
   /** Registered project root (the path stored in the registry) when scope is project. */
@@ -42,6 +44,12 @@ export interface ResolvedScope {
   projectSlug?: string;
   /** Absolute path to the project's state-dir project.db. */
   projectDbPath?: string;
+  /**
+   * Role from the global registry (migration v4). 'pm' unlocks the
+   * cross-project admin tool surface (project_move / project_rename /
+   * project_relocate); 'standard' is the default.
+   */
+  projectRole?: ProjectRole;
 }
 
 /**
@@ -79,7 +87,7 @@ export function resolveScope(input: ResolveScopeInput): ResolvedScope {
 }
 
 function buildProjectScope(
-  hit: { root_path: string; slug: string },
+  hit: { root_path: string; slug: string; role: ProjectRole },
   home: string,
 ): ResolvedScope {
   return {
@@ -87,38 +95,44 @@ function buildProjectScope(
     projectRoot: hit.root_path,
     projectSlug: hit.slug,
     projectDbPath: stateDbPath(hit.slug, home),
+    projectRole: hit.role,
   };
+}
+
+function toRole(raw: string | undefined): ProjectRole {
+  return raw === "pm" ? "pm" : "standard";
 }
 
 /** Exact match of `cwd` against registered root_paths. */
 function lookupRegistered(
   cwd: string,
   globalDb: DatabaseSync,
-): { root_path: string; slug: string } | null {
+): { root_path: string; slug: string; role: ProjectRole } | null {
   const row = globalDb
-    .prepare("SELECT name, root_path FROM projects WHERE root_path = ?")
-    .get(cwd) as { name: string; root_path: string } | undefined;
+    .prepare("SELECT name, root_path, role FROM projects WHERE root_path = ?")
+    .get(cwd) as { name: string; root_path: string; role: string } | undefined;
   if (!row) return null;
-  return { root_path: row.root_path, slug: row.name };
+  return { root_path: row.root_path, slug: row.name, role: toRole(row.role) };
 }
 
 /** Walk-up from cwd, match each level against registered root_paths. */
 function findProjectAtOrAbove(
   startCwd: string,
   globalDb: DatabaseSync,
-): { root_path: string; slug: string } | null {
-  const rows = globalDb.prepare("SELECT name, root_path FROM projects").all() as Array<{
+): { root_path: string; slug: string; role: ProjectRole } | null {
+  const rows = globalDb.prepare("SELECT name, root_path, role FROM projects").all() as Array<{
     name: string;
     root_path: string;
+    role: string;
   }>;
   if (rows.length === 0) return null;
-  const byPath = new Map<string, string>();
-  for (const r of rows) byPath.set(resolve(r.root_path), r.name);
+  const byPath = new Map<string, { slug: string; role: ProjectRole }>();
+  for (const r of rows) byPath.set(resolve(r.root_path), { slug: r.name, role: toRole(r.role) });
 
   let dir = startCwd;
   while (true) {
-    const slug = byPath.get(dir);
-    if (slug !== undefined) return { root_path: dir, slug };
+    const hit = byPath.get(dir);
+    if (hit !== undefined) return { root_path: dir, slug: hit.slug, role: hit.role };
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;

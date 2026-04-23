@@ -1099,6 +1099,95 @@ async function runProjectRefresh(): Promise<void> {
   }
 }
 
+async function runProjectMove(
+  slug: string,
+  newPath: string,
+  opts: { move: boolean; force: boolean },
+): Promise<void> {
+  const { moveProject, MoveProjectError } = await import("./project/move.js");
+  const config = await loadConfigOrExit();
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
+  try {
+    const r = await moveProject({
+      slug,
+      newPath: resolvePath(newPath),
+      mode: opts.move ? "move" : "copy",
+      force: opts.force,
+      allowedRoots: config.workspace.allowed_roots,
+      globalDb,
+    });
+    if (r.mode === "move") {
+      log(`moved project '${r.slug}' from ${r.oldPath} to ${r.newPath}`);
+    } else {
+      log(`copied project '${r.slug}' from ${r.oldPath} to ${r.newPath} (source retained; pass --move to delete it)`);
+    }
+    if (r.sourceDeleteWarning) log(`warning: ${r.sourceDeleteWarning}`);
+  } catch (e) {
+    if (e instanceof MoveProjectError) err(`${e.code}: ${e.message}`, 2);
+    throw e;
+  } finally {
+    globalDb.close();
+  }
+}
+
+async function runProjectRename(slug: string, newName: string): Promise<void> {
+  const { renameProject, RenameProjectError } = await import("./project/rename.js");
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
+  try {
+    const r = await renameProject({ slug, newName, globalDb });
+    if (r.oldSlug === r.newSlug) {
+      log(`renamed display '${r.oldName}' → '${r.newName}' (slug unchanged: ${r.newSlug})`);
+    } else {
+      log(`renamed '${r.oldSlug}' → '${r.newSlug}' (display '${r.oldName}' → '${r.newName}')`);
+      if (r.stateDirRenamed) log(`  state-dir renamed under ~/.vcf/projects/`);
+    }
+  } catch (e) {
+    if (e instanceof RenameProjectError) err(`${e.code}: ${e.message}`, 2);
+    throw e;
+  } finally {
+    globalDb.close();
+  }
+}
+
+async function runProjectRelocate(slug: string, newPath: string): Promise<void> {
+  const { relocateProject, RelocateProjectError } = await import("./project/relocate.js");
+  const config = await loadConfigOrExit();
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
+  try {
+    const r = await relocateProject({
+      slug,
+      newPath: resolvePath(newPath),
+      allowedRoots: config.workspace.allowed_roots,
+      globalDb,
+    });
+    if (r.oldPath === r.newPath) {
+      log(`project '${r.slug}' already at ${r.newPath} — no change`);
+    } else {
+      log(`relocated '${r.slug}' pointer: ${r.oldPath} → ${r.newPath}`);
+    }
+  } catch (e) {
+    if (e instanceof RelocateProjectError) err(`${e.code}: ${e.message}`, 2);
+    throw e;
+  } finally {
+    globalDb.close();
+  }
+}
+
+async function runProjectSetRole(slug: string, role: string): Promise<void> {
+  if (role !== "pm" && role !== "standard") {
+    err(`invalid role '${role}' — must be 'pm' or 'standard'`, 2);
+  }
+  const { setProjectRole } = await import("./util/projectRegistry.js");
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
+  try {
+    const changed = setProjectRole(globalDb, slug, role as "pm" | "standard");
+    if (!changed) err(`no registered project with slug '${slug}'`, 2);
+    log(`set project '${slug}' role to '${role}'`);
+  } finally {
+    globalDb.close();
+  }
+}
+
 /** Minimal slug helper — strictly the registry name shape. */
 function slugifyBasic(s: string): string {
   return (
@@ -1897,6 +1986,68 @@ project
   .action(async () => {
     try {
       await runProjectRefresh();
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+project
+  .command("move")
+  .description(
+    "Copy (or move, with --move) a project's directory to a new location and re-point the registry + project.db root_path. Target must live inside workspace.allowed_roots.",
+  )
+  .argument("<slug>", "registered project slug")
+  .argument("<new-path>", "absolute path to copy/move the project to")
+  .option("--move", "delete the source directory after copy+DB updates succeed (default: copy)", false)
+  .option("--force", "overwrite non-empty target", false)
+  .action(async (slug: string, newPath: string, opts: { move: boolean; force: boolean }) => {
+    try {
+      await runProjectMove(slug, newPath, opts);
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+project
+  .command("rename")
+  .description(
+    "Rename a project's display name. The slug derived from the new name keys the state-dir under ~/.vcf/projects/, so this also renames the state-dir. root_path is NOT touched.",
+  )
+  .argument("<slug>", "current registered project slug")
+  .argument("<new-name>", "new display name")
+  .action(async (slug: string, newName: string) => {
+    try {
+      await runProjectRename(slug, newName);
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+project
+  .command("relocate")
+  .description(
+    "Re-point a project's registered root_path to a new directory WITHOUT moving files. Use when the project directory was moved externally. For an actual copy/move, use `vcf project move` instead.",
+  )
+  .argument("<slug>", "registered project slug")
+  .argument("<new-path>", "absolute path to point root_path at (must already exist)")
+  .action(async (slug: string, newPath: string) => {
+    try {
+      await runProjectRelocate(slug, newPath);
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+project
+  .command("set-role")
+  .description(
+    "Designate a project as PM (admin) — unlocks cross-project admin tools (project_move / project_rename / project_relocate) in that project's MCP sessions. Or revert to 'standard'.",
+  )
+  .argument("<slug>", "registered project slug")
+  .argument("<role>", "'pm' or 'standard'")
+  .action(async (slug: string, role: string) => {
+    try {
+      await runProjectSetRole(slug, role);
     } catch (e) {
       err((e as Error).message);
     }

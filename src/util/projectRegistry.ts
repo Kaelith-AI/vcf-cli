@@ -19,6 +19,8 @@ import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import { queryAll, queryRow } from "./db.js";
 
+export type ProjectRole = "standard" | "pm";
+
 export interface ProjectRow {
   name: string;
   root_path: string;
@@ -26,6 +28,7 @@ export interface ProjectRow {
   depends_on: string[];
   registered_at: number;
   last_seen_at: number;
+  role: ProjectRole;
 }
 
 const DbRowSchema = z.object({
@@ -35,6 +38,7 @@ const DbRowSchema = z.object({
   depends_on_json: z.string(),
   registered_at: z.number(),
   last_seen_at: z.number(),
+  role: z.string().default("standard"),
 });
 type DbRow = z.infer<typeof DbRowSchema>;
 
@@ -53,6 +57,7 @@ function rowOf(r: DbRow): ProjectRow {
     depends_on: deps,
     registered_at: r.registered_at,
     last_seen_at: r.last_seen_at,
+    role: r.role === "pm" ? "pm" : "standard",
   };
 }
 
@@ -91,7 +96,7 @@ export function unregisterProject(db: DatabaseType, name: string): boolean {
 export function listProjects(db: DatabaseType): ProjectRow[] {
   return queryAll(
     db,
-    "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects ORDER BY registered_at DESC",
+    "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at, role FROM projects ORDER BY registered_at DESC",
     DbRowSchema,
   ).map(rowOf);
 }
@@ -100,7 +105,7 @@ export function listProjects(db: DatabaseType): ProjectRow[] {
 export function getProjectByName(db: DatabaseType, name: string): ProjectRow | null {
   const row = queryRow(
     db,
-    "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects WHERE name = ?",
+    "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at, role FROM projects WHERE name = ?",
     DbRowSchema,
     [name],
   );
@@ -111,7 +116,7 @@ export function getProjectByName(db: DatabaseType, name: string): ProjectRow | n
 export function getProjectByRoot(db: DatabaseType, root_path: string): ProjectRow | null {
   const row = queryRow(
     db,
-    "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at FROM projects WHERE root_path = ?",
+    "SELECT name, root_path, state_cache, depends_on_json, registered_at, last_seen_at, role FROM projects WHERE root_path = ?",
     DbRowSchema,
     [root_path],
   );
@@ -168,6 +173,18 @@ export function setProjectDependsOn(
     Date.now(),
     root_path,
   );
+}
+
+/**
+ * Set a project's admin role. `pm` unlocks the cross-project admin tool
+ * surface (project_move / project_rename / project_relocate); `standard`
+ * is the default. Returns true iff a row was updated.
+ */
+export function setProjectRole(db: DatabaseType, name: string, role: ProjectRole): boolean {
+  const info = db
+    .prepare("UPDATE projects SET role = ?, last_seen_at = ? WHERE name = ?")
+    .run(role, Date.now(), name);
+  return info.changes > 0;
 }
 
 /**
