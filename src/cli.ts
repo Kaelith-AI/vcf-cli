@@ -35,7 +35,6 @@ import { runInstallSkills, runUpdatePrimers } from "./cli/skills.js";
 import { runEmbedKb } from "./cli/embed.js";
 import { runAdminAudit, runAdminConfigHistory } from "./cli/admin.js";
 import { runBackup, runRestore } from "./cli/backup.js";
-import { runLessonsReconcile } from "./cli/lessons.js";
 import { runMigrate03 } from "./cli/migrate.js";
 import { runTestTrends } from "./cli/testTrends.js";
 
@@ -566,29 +565,6 @@ program
     async (opts: { project?: string; since?: string; limit?: number; format: string }) => {
       try {
         await runTestTrends(opts);
-      } catch (e) {
-        err((e as Error).message);
-      }
-    },
-  );
-
-const lessonsCmd = program
-  .command("lessons")
-  .description("Per-project lesson-log maintenance (mirror reconcile, etc.).");
-lessonsCmd
-  .command("reconcile")
-  .description(
-    "Drain lessons with mirror_status != 'mirrored' into the global lessons DB. Idempotent. " +
-      "Targets the registered project at or above --project (or cwd); pass --all to walk every registered project.",
-  )
-  .option("--project <path>", "project root to reconcile (defaults to cwd)")
-  .option("--all", "reconcile every registered project", false)
-  .option("--limit <n>", "cap rows drained per project (default 10000)", (v) => parseInt(v, 10))
-  .option("--format <fmt>", "table | json", "table")
-  .action(
-    async (opts: { project?: string; all?: boolean; limit?: number; format: string }) => {
-      try {
-        await runLessonsReconcile(opts);
       } catch (e) {
         err((e as Error).message);
       }

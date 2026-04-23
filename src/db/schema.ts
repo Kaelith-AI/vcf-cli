@@ -382,4 +382,24 @@ export const PROJECT_MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_feedback_stage ON feedback(stage);
     `,
   },
+  {
+    version: 8,
+    name: "drop_per_project_lessons_feedback",
+    up: `
+      -- Followup #41: lessons and feedback are improvement-cycle data,
+      -- not project-lifecycle data, so they move to a global-only store.
+      -- The drain helper (src/db/drain.ts) runs before this migration and
+      -- copies any surviving rows to ~/.vcf/lessons.db with idempotent
+      -- INSERT OR IGNORE. Rows are safely preserved in the global store
+      -- before this DROP executes.
+      DROP INDEX IF EXISTS idx_lessons_mirror_status;
+      DROP INDEX IF EXISTS idx_lessons_scope;
+      DROP INDEX IF EXISTS idx_lessons_stage;
+      DROP INDEX IF EXISTS idx_lessons_created_at;
+      DROP TABLE IF EXISTS lessons;
+      DROP INDEX IF EXISTS idx_feedback_created;
+      DROP INDEX IF EXISTS idx_feedback_stage;
+      DROP TABLE IF EXISTS feedback;
+    `,
+  },
 ];

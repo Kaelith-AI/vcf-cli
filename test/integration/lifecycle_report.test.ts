@@ -80,7 +80,7 @@ describe("lifecycle_report (Phase C)", () => {
         },
       ],
       kb: { root: kbRoot },
-      lessons: { global_db_path: join(home, ".vcf", "lessons.db"), default_scope: "project" },
+      lessons: { global_db_path: join(home, ".vcf", "lessons.db") },
       defaults: { lifecycle_report: { endpoint: "local-stub", model: "test-model" } },
     });
   }
@@ -111,6 +111,8 @@ describe("lifecycle_report (Phase C)", () => {
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
     const dbPath = join(home, ".vcf", "projects", "demo", "project.db");
     const projectDb = openProjectDb({ path: dbPath });
+    const { getGlobalLessonsDb } = await import("../../src/db/globalLessons.js");
+    const lessonsDb = getGlobalLessonsDb(config.lessons.global_db_path);
     const resolved: ResolvedScope = {
       scope: "project",
       projectRoot: projectDir,
@@ -129,22 +131,23 @@ describe("lifecycle_report (Phase C)", () => {
     await server.connect(a);
     const client = new Client({ name: "t", version: "0" }, { capabilities: {} });
     await client.connect(b);
-    return { client, globalDb, projectDb, config };
+    return { client, globalDb, projectDb, lessonsDb, config };
   }
 
   it("structured mode returns a valid LifecycleReport with all 8 sections", async () => {
-    const { projectDb, globalDb } = await bootProjectScope();
-    // Seed one lesson so its section isn't empty.
-    projectDb
+    const { projectDb, globalDb, lessonsDb } = await bootProjectScope();
+    // Seed one lesson in the global store, tagged with this project.
+    lessonsDb!
       .prepare(
-        `INSERT INTO lessons (title, observation, scope, stage, tags_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO lessons (project_root, title, observation, scope, stage, tags_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run("seed lesson", "body", "project", "building", "[]", Date.now());
+      .run(projectDir, "seed lesson", "body", "project", "building", "[]", Date.now());
 
     const report = buildStructuredReport({
       projectDb,
       globalDb,
+      lessonsDb,
       projectRoot: projectDir,
       include: [...LIFECYCLE_SECTION_ORDER],
       auditRowCap: 500,
@@ -163,10 +166,11 @@ describe("lifecycle_report (Phase C)", () => {
   });
 
   it("markdown rendering produces a non-empty document with section headers", async () => {
-    const { projectDb, globalDb } = await bootProjectScope();
+    const { projectDb, globalDb, lessonsDb } = await bootProjectScope();
     const report = buildStructuredReport({
       projectDb,
       globalDb,
+      lessonsDb,
       projectRoot: projectDir,
       include: [...LIFECYCLE_SECTION_ORDER],
       auditRowCap: 500,
@@ -195,16 +199,17 @@ describe("lifecycle_report (Phase C)", () => {
   });
 
   it("narrative mode redacts audit / lesson content before sending to the LLM", async () => {
-    const { projectDb, globalDb, config } = await bootProjectScope();
+    const { projectDb, globalDb, lessonsDb, config } = await bootProjectScope();
     // Seed a lesson whose TITLE contains an sk- key — title survives into the
     // lessons section's `recent[].title` field, which gets serialized into
     // the narrative prompt. Redaction must fire before the prompt leaves.
-    projectDb
+    lessonsDb!
       .prepare(
-        `INSERT INTO lessons (title, observation, scope, stage, tags_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO lessons (project_root, title, observation, scope, stage, tags_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
+        projectDir,
         "canary sk-proj-abc12345XYZ67890defGHIJKLmno",
         "body",
         "project",
@@ -216,6 +221,7 @@ describe("lifecycle_report (Phase C)", () => {
     const report = buildStructuredReport({
       projectDb,
       globalDb,
+      lessonsDb,
       projectRoot: projectDir,
       include: ["project", "lessons"],
       auditRowCap: 50,

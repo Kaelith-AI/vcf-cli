@@ -10,6 +10,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PROJECT_MIGRATIONS } from "./schema.js";
 import { runMigrations } from "./migrate.js";
+import { drainLegacyLessonsFeedback } from "./drain.js";
 
 export interface OpenProjectDbOptions {
   /** Absolute path to <project>/.vcf/project.db. */
@@ -27,6 +28,9 @@ export function openProjectDb(opts: OpenProjectDbOptions): DatabaseSync {
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("PRAGMA synchronous = NORMAL");
+    // #41: drain legacy per-project lessons/feedback to the global store
+    // BEFORE v8 drops the tables. Idempotent, no-op on fresh DBs.
+    drainLegacyLessonsFeedback(db);
     runMigrations(db, PROJECT_MIGRATIONS);
   } else {
     db.exec("PRAGMA foreign_keys = ON");

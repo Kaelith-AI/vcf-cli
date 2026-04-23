@@ -8,6 +8,7 @@ import { createServer } from "../../src/server.js";
 import { openGlobalDb, openProjectDb, closeTrackedDbs } from "../helpers/db-cleanup.js";
 import { ConfigSchema } from "../../src/config/schema.js";
 import { clearKbCache } from "../../src/primers/load.js";
+import { resetGlobalLessonsCache, openGlobalLessonsDb } from "../../src/db/globalLessons.js";
 import type { ResolvedScope } from "../../src/scope.js";
 
 interface Envelope {
@@ -23,19 +24,21 @@ function parseResult(result: unknown): Envelope {
   return JSON.parse(text) as Envelope;
 }
 
-describe("feedback_add + feedback_list (followup #18)", () => {
+describe("feedback_add + feedback_list (global-only, #41)", () => {
   let workRoot: string;
   let home: string;
   let projectDir: string;
-  let projectDb: ReturnType<typeof openProjectDb>;
+  let lessonsDbPath: string;
   let client: Client;
 
   beforeEach(async () => {
     workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-fb-")));
     home = await realpath(await mkdtemp(join(tmpdir(), "vcf-fbh-")));
     projectDir = join(workRoot, "demo");
+    lessonsDbPath = join(home, ".vcf", "lessons.db");
     await mkdir(projectDir, { recursive: true });
     clearKbCache();
+    resetGlobalLessonsCache();
 
     const config = ConfigSchema.parse({
       version: 1,
@@ -53,11 +56,12 @@ describe("feedback_add + feedback_list (followup #18)", () => {
         },
       ],
       kb: { root: join(home, ".vcf", "kb") },
+      lessons: { global_db_path: lessonsDbPath },
     });
 
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
     const dbPath = join(home, ".vcf", "projects", "demo", "project.db");
-    projectDb = openProjectDb({ path: dbPath });
+    const projectDb = openProjectDb({ path: dbPath });
     const now = Date.now();
     projectDb
       .prepare(
@@ -93,11 +97,24 @@ describe("feedback_add + feedback_list (followup #18)", () => {
       /* noop */
     }
     closeTrackedDbs();
+    resetGlobalLessonsCache();
     await rm(workRoot, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
     await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
   });
 
-  it("feedback_add writes a row and returns the id", async () => {
+  function readGlobalFeedback(id: number): { note: string; stage: string | null; urgency: string | null; project_root: string } {
+    const db = openGlobalLessonsDb({ path: lessonsDbPath });
+    try {
+      const row = db
+        .prepare("SELECT note, stage, urgency, project_root FROM feedback WHERE id = ?")
+        .get(id) as { note: string; stage: string | null; urgency: string | null; project_root: string };
+      return row;
+    } finally {
+      db.close();
+    }
+  }
+
+  it("feedback_add writes a row to the global store tagged with project_root", async () => {
     const res = await client.callTool({
       name: "feedback_add",
       arguments: { note: "the plan template is confusing" },
@@ -106,10 +123,9 @@ describe("feedback_add + feedback_list (followup #18)", () => {
     expect(env.ok).toBe(true);
     const { feedback_id } = env.content as { feedback_id: number };
     expect(feedback_id).toBeGreaterThan(0);
-    const row = projectDb
-      .prepare("SELECT note FROM feedback WHERE id = ?")
-      .get(feedback_id) as { note: string };
+    const row = readGlobalFeedback(feedback_id);
     expect(row.note).toBe("the plan template is confusing");
+    expect(row.project_root).toBe(projectDir);
   });
 
   it("feedback_add honors stage + urgency enums", async () => {
@@ -119,12 +135,8 @@ describe("feedback_add + feedback_list (followup #18)", () => {
     });
     const env = parseResult(res);
     expect(env.ok).toBe(true);
-    const row = projectDb
-      .prepare("SELECT stage, urgency FROM feedback WHERE id = ?")
-      .get((env.content as { feedback_id: number }).feedback_id) as {
-      stage: string;
-      urgency: string;
-    };
+    const { feedback_id } = env.content as { feedback_id: number };
+    const row = readGlobalFeedback(feedback_id);
     expect(row.stage).toBe("reviewing");
     expect(row.urgency).toBe("high");
   });
@@ -142,14 +154,12 @@ describe("feedback_add + feedback_list (followup #18)", () => {
       redaction_applied: boolean;
     };
     expect(redaction_applied).toBe(true);
-    const row = projectDb
-      .prepare("SELECT note FROM feedback WHERE id = ?")
-      .get(feedback_id) as { note: string };
+    const row = readGlobalFeedback(feedback_id);
     expect(row.note).not.toContain(canary);
     expect(row.note).toContain("[REDACTED:openai-key]");
   });
 
-  it("feedback_list returns rows newest-first; filters by stage/urgency", async () => {
+  it("feedback_list returns rows newest-first scoped to this project; filters by stage/urgency", async () => {
     for (const [note, stage, urgency] of [
       ["one", "planning", "low"],
       ["two", "building", "high"],
@@ -170,10 +180,36 @@ describe("feedback_add + feedback_list (followup #18)", () => {
       entries: Array<{ note: string; urgency: string; stage: string }>;
     };
     expect(entries).toHaveLength(2);
-    // Newest-first.
     expect(entries[0].note).toBe("three");
     expect(entries[1].note).toBe("two");
     for (const e of entries) expect(e.urgency).toBe("high");
+  });
+
+  it("feedback_list filter=all returns cross-project feedback", async () => {
+    await client.callTool({
+      name: "feedback_add",
+      arguments: { note: "mine" },
+    });
+    // Inject a foreign-project row directly into the global store.
+    const db = openGlobalLessonsDb({ path: lessonsDbPath });
+    try {
+      db.prepare(
+        `INSERT INTO feedback (project_root, note, created_at) VALUES (?, ?, ?)`,
+      ).run("/other/project", "not mine", Date.now());
+    } finally {
+      db.close();
+    }
+    const res = await client.callTool({
+      name: "feedback_list",
+      arguments: { filter: "all", expand: true },
+    });
+    const env = parseResult(res);
+    expect(env.ok).toBe(true);
+    const { entries } = env.content as {
+      entries: Array<{ note: string; project_root: string }>;
+    };
+    expect(entries.length).toBeGreaterThanOrEqual(2);
+    expect(entries.some((e) => e.note === "not mine")).toBe(true);
   });
 
   it("feedback_add rejects unknown keys with E_VALIDATION via the SDK", async () => {
@@ -185,5 +221,56 @@ describe("feedback_add + feedback_list (followup #18)", () => {
     const text = res.content?.[0]?.text ?? "";
     expect(text).toMatch(/unrecognized_keys/i);
     expect(text).toMatch(/__bogus/);
+  });
+
+  it("fails with E_SCOPE_DENIED when global_db_path is null", async () => {
+    // Separate client with a null-path config.
+    const config = ConfigSchema.parse({
+      version: 1,
+      workspace: {
+        allowed_roots: [workRoot],
+        ideas_dir: join(workRoot, "ideas"),
+        specs_dir: join(workRoot, "specs"),
+      },
+      endpoints: [
+        {
+          name: "local-stub",
+          provider: "local-stub",
+          base_url: "http://127.0.0.1:1",
+          trust_level: "local",
+        },
+      ],
+      kb: { root: join(home, ".vcf", "kb") },
+      lessons: { global_db_path: null },
+    });
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    const dbPath = join(home, ".vcf", "projects", "demo", "project.db");
+    const projectDb = openProjectDb({ path: dbPath });
+    const resolved: ResolvedScope = {
+      scope: "project",
+      projectRoot: projectDir,
+      projectSlug: "demo",
+      projectDbPath: dbPath,
+    };
+    const server = createServer({
+      scope: "project",
+      resolved,
+      config,
+      globalDb,
+      projectDb,
+      homeDir: home,
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const c = new Client({ name: "fb2", version: "0" }, { capabilities: {} });
+    await c.connect(b);
+    const res = await c.callTool({
+      name: "feedback_add",
+      arguments: { note: "disabled" },
+    });
+    const env = parseResult(res);
+    expect(env.ok).toBe(false);
+    expect(env.code).toBe("E_SCOPE_DENIED");
+    await c.close();
   });
 });

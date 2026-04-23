@@ -49,14 +49,37 @@ export const GLOBAL_LESSONS_MIGRATIONS: Migration[] = [
     version: 2,
     name: "mirror_idempotency_index",
     up: `
-      -- Followup #42: 'vcf lessons reconcile' needs a stable identity for
-      -- "is this lesson already in the mirror?" so repeated reconcile runs
-      -- don't duplicate rows. (project_root, title, created_at) is unique
-      -- enough at ms granularity — collision odds are negligible in a
-      -- single-operator corpus. A UNIQUE index also lets us fold the
-      -- existence check into the upsert path via INSERT OR IGNORE.
+      -- (Obsolete in 0.7+; kept for back-compat with DBs that already have
+      -- this index. The UNIQUE index is reused by followup #41's drain path
+      -- for idempotent INSERT OR IGNORE.) Collision odds are negligible in
+      -- a single-operator corpus at ms granularity.
       CREATE UNIQUE INDEX IF NOT EXISTS uniq_global_lessons_identity
         ON lessons(project_root, title, created_at);
+    `,
+  },
+  {
+    version: 3,
+    name: "global_feedback",
+    up: `
+      -- Followup #41: feedback moves to the global store alongside lessons
+      -- because it's improvement-cycle data, not project-lifecycle data.
+      -- project_root tags each row with the origin project so retrospectives
+      -- can filter or aggregate across projects.
+      CREATE TABLE IF NOT EXISTS feedback (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_root TEXT NOT NULL,
+        note         TEXT NOT NULL,
+        stage        TEXT CHECK (stage IS NULL OR stage IN (
+                       'draft','planning','building','testing','reviewing','shipping','shipped'
+                     )),
+        urgency      TEXT CHECK (urgency IS NULL OR urgency IN ('low','normal','high')),
+        created_at   INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_global_feedback_project ON feedback(project_root);
+      CREATE INDEX IF NOT EXISTS idx_global_feedback_created ON feedback(created_at);
+      CREATE INDEX IF NOT EXISTS idx_global_feedback_stage ON feedback(stage);
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_global_feedback_identity
+        ON feedback(project_root, note, created_at);
     `,
   },
 ];

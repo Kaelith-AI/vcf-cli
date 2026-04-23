@@ -6,7 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Changed (breaking — 0.7 scope)
+
+- **Lessons + feedback are now global-only (#41).** Both improvement-cycle
+  channels live in one store at the resolved `config.lessons.global_db_path`
+  (default `~/.vcf/lessons.db`) tagged with `project_root`. The per-project
+  `lessons` and `feedback` tables are dropped by project-DB migration v8.
+  - `lesson_search` renamed its filter arg: `scope` (`project | global | all`)
+    is now `filter` (`current | universal | all`). `current` scopes to this
+    project, `universal` returns rows marked `scope='universal'`, `all` returns
+    everything.
+  - `feedback_list` gained a `filter` arg (`current | all`) with the same
+    semantics.
+  - Removed config knobs: `config.lessons.mirror_policy` (no mirror → no
+    policy), `config.lessons.default_scope` (redundant with explicit arg).
+    `global_db_path: null` still disables the store entirely (E_SCOPE_DENIED
+    on every lesson/feedback tool).
+  - Removed CLI: `vcf lessons reconcile` (obsolete — single store).
+  - Migration path: `openProjectDb` runs a one-shot drain (`src/db/drain.ts`)
+    BEFORE v8 executes. Any surviving per-project rows are copied to the
+    global store with idempotent `INSERT OR IGNORE` keyed on
+    `(project_root, title, created_at)` / `(project_root, note, created_at)`.
+    No data loss on upgrade.
+  - Rationale: improvement-cycle data is about how the operator works, not
+    about one specific project. Cross-project retrospectives and
+    self-improvement passes should read the full corpus without having to
+    walk N project DBs.
+- `lifecycle_report`'s lessons section reads from the global store filtered
+  by `project_root`. When the store is disabled, the section reports zero
+  rows rather than failing.
+
+### Removed
+
+- `src/cli/lessons.ts`, `src/project/lessonsReconcile.ts` — obsolete.
+- `test/integration/lessons_reconcile.test.ts`,
+  `test/integration/lesson_mirror_disabled.test.ts`,
+  `test/integration/lesson_mirror_policy.test.ts` — obsolete.
 
 ---
 

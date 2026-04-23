@@ -11,16 +11,14 @@ import { createServer } from "../../src/server.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
-// Followup #40 — perf fixture for lesson_search SQL pushdown.
+// Followup #40 — perf fixture for lesson_search SQL pushdown at scale.
+// Global-only store (followup #41): 10_000 rows in ~/.vcf/lessons.db,
+// half tagged with this project, half with a mix of other projects.
 //
-// Shape:
-//   - 10_000 project-lessons + 10_000 global-lessons
-//   - measure p95 latency across 50 calls for three shapes:
-//       1. scope=project, free-text query → LIKE on title/observation
-//       2. scope=global, tag filter → tags_json LIKE
-//       3. scope=all, combined query + tag + stage → every predicate
-// Gate: p95 < 100ms. The claim was bounded on a single-operator workstation
-// and validated here against an ephemeral SQLite DB with WAL + indexes.
+// Gate: p95 < 100ms across 50 calls for three shapes:
+//   1. filter=current, free-text query → LIKE on title/observation
+//   2. filter=all, tag filter → tags_json LIKE
+//   3. filter=all, combined query + tag + stage → every predicate
 
 const SCALE = 10_000;
 const TRIALS = 50;
@@ -28,7 +26,7 @@ const P95_MS = 100;
 
 async function ingestLessons(
   db: DatabaseSync,
-  source: "project" | "global",
+  thisProjectRoot: string,
   count: number,
 ): Promise<void> {
   const stageCycle = ["planning", "building", "testing", "reviewing", "shipping"] as const;
@@ -45,18 +43,11 @@ async function ingestLessons(
     "release",
   ];
   db.exec("BEGIN");
-  const stmt =
-    source === "global"
-      ? db.prepare(
-          `INSERT INTO lessons (project_root, title, context, observation, actionable_takeaway,
-                                scope, stage, tags_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-      : db.prepare(
-          `INSERT INTO lessons (title, context, observation, actionable_takeaway,
-                                scope, stage, tags_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
+  const stmt = db.prepare(
+    `INSERT INTO lessons (project_root, title, context, observation, actionable_takeaway,
+                          scope, stage, tags_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
   const base = Date.now() - count;
   for (let i = 0; i < count; i++) {
     const stage = stageCycle[i % stageCycle.length];
@@ -67,26 +58,24 @@ async function ingestLessons(
     const takeaway = `Take away: review ${tagPool[(i + 3) % tagPool.length]} config before shipping.`;
     const tagsJson = JSON.stringify(tags);
     const createdAt = base + i;
-    if (source === "global") {
-      stmt.run(
-        `/tmp/proj-${i % 5}`,
-        title,
-        context,
-        observation,
-        takeaway,
-        "project",
-        stage,
-        tagsJson,
-        createdAt,
-      );
-    } else {
-      stmt.run(title, context, observation, takeaway, "project", stage, tagsJson, createdAt);
-    }
+    // Split rows: half tagged with this project, half with other projects.
+    const projectRoot = i % 2 === 0 ? thisProjectRoot : `/tmp/proj-${i % 5}`;
+    stmt.run(
+      projectRoot,
+      title,
+      context,
+      observation,
+      takeaway,
+      "project",
+      stage,
+      tagsJson,
+      createdAt,
+    );
   }
   db.exec("COMMIT");
 }
 
-describe("lesson_search perf @ 10k project + 10k global rows", () => {
+describe("lesson_search perf @ 10k global rows (#41)", () => {
   let home: string;
   let projectDir: string;
   let projectDb: DatabaseSync;
@@ -125,7 +114,6 @@ describe("lesson_search perf @ 10k project + 10k global rows", () => {
          VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run("demo", projectDir, "reviewing", Date.now(), Date.now(), null, 0);
-    await ingestLessons(projectDb, "project", SCALE);
 
     globalLessonsDb = new DatabaseSync(join(home, ".vcf", "lessons.db"), {
       enableForeignKeyConstraints: true,
@@ -133,7 +121,7 @@ describe("lesson_search perf @ 10k project + 10k global rows", () => {
     globalLessonsDb.exec("PRAGMA journal_mode = WAL");
     globalLessonsDb.exec("PRAGMA synchronous = NORMAL");
     runMigrations(globalLessonsDb, GLOBAL_LESSONS_MIGRATIONS);
-    await ingestLessons(globalLessonsDb, "global", SCALE);
+    await ingestLessons(globalLessonsDb, projectDir, SCALE);
     globalLessonsDb.close();
 
     const config = ConfigSchema.parse({
@@ -213,7 +201,6 @@ describe("lesson_search perf @ 10k project + 10k global rows", () => {
 
   async function measure(args: Record<string, unknown>): Promise<number> {
     const samples: number[] = [];
-    // Warmup — SQLite statement cache, page cache, JIT.
     for (let i = 0; i < 3; i++) await callLessonSearch(args);
     for (let i = 0; i < TRIALS; i++) {
       const t0 = performance.now();
@@ -223,19 +210,19 @@ describe("lesson_search perf @ 10k project + 10k global rows", () => {
     return p95(samples);
   }
 
-  it(`scope=project, query, limit=20: p95 < ${P95_MS}ms`, async () => {
-    const val = await measure({ scope: "project", query: "ollama", limit: 20 });
+  it(`filter=current, query, limit=20: p95 < ${P95_MS}ms`, async () => {
+    const val = await measure({ filter: "current", query: "ollama", limit: 20 });
     expect(val).toBeLessThan(P95_MS);
   }, 60_000);
 
-  it(`scope=global, tag filter, limit=20: p95 < ${P95_MS}ms`, async () => {
-    const val = await measure({ scope: "global", tags: ["ollama"], limit: 20 });
+  it(`filter=all, tag filter, limit=20: p95 < ${P95_MS}ms`, async () => {
+    const val = await measure({ filter: "all", tags: ["ollama"], limit: 20 });
     expect(val).toBeLessThan(P95_MS);
   }, 60_000);
 
-  it(`scope=all, query + tag + stage, limit=20: p95 < ${P95_MS}ms`, async () => {
+  it(`filter=all, query + tag + stage, limit=20: p95 < ${P95_MS}ms`, async () => {
     const val = await measure({
-      scope: "all",
+      filter: "all",
       query: "shipping",
       tags: ["performance"],
       stage: "shipping",

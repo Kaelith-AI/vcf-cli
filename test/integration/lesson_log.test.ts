@@ -29,7 +29,7 @@ function parseResult(result: unknown): Envelope {
   return JSON.parse(text) as Envelope;
 }
 
-describe("lesson_log_add / lesson_search (Phase A)", () => {
+describe("lesson_log_add / lesson_search (global-only, #41)", () => {
   let workRoot: string;
   let home: string;
   let kbRoot: string;
@@ -56,7 +56,7 @@ describe("lesson_log_add / lesson_search (Phase A)", () => {
     await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
   });
 
-  function makeConfig() {
+  function makeConfig(overrides: { global_db_path?: string | null } = {}) {
     return ConfigSchema.parse({
       version: 1,
       workspace: {
@@ -73,14 +73,15 @@ describe("lesson_log_add / lesson_search (Phase A)", () => {
         },
       ],
       kb: { root: kbRoot },
-      lessons: { global_db_path: lessonsDbPath, default_scope: "project" },
+      lessons: {
+        global_db_path: overrides.global_db_path === undefined ? lessonsDbPath : overrides.global_db_path,
+      },
     });
   }
 
-  async function bootProjectScope() {
-    // Global scope: project_init.
+  async function bootProjectScope(configOverrides: { global_db_path?: string | null } = {}) {
     {
-      const config = makeConfig();
+      const config = makeConfig(configOverrides);
       const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
       const server = createServer({
         scope: "global",
@@ -101,7 +102,7 @@ describe("lesson_log_add / lesson_search (Phase A)", () => {
       globalDb.close();
     }
 
-    const config = makeConfig();
+    const config = makeConfig(configOverrides);
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
     const dbPath = join(home, ".vcf", "projects", "demo", "project.db");
     const projectDb = openProjectDb({ path: dbPath });
@@ -140,20 +141,18 @@ describe("lesson_log_add / lesson_search (Phase A)", () => {
       expect(parseResult(res).ok).toBe(true);
     }
 
-    // Tag-only (AND): arithmetic + even → 5 matches
     const byTag = await client.callTool({
       name: "lesson_search",
-      arguments: { tags: ["arithmetic", "even"], scope: "project", expand: true },
+      arguments: { tags: ["arithmetic", "even"], filter: "current", expand: true },
     });
     const byTagEnv = parseResult(byTag);
     expect(byTagEnv.ok).toBe(true);
     const tagContent = byTagEnv.content as { matches: Array<{ title: string }> };
     expect(tagContent.matches.length).toBe(5);
 
-    // Substring match: "item 7" appears only in lesson 7
     const bySubstr = await client.callTool({
       name: "lesson_search",
-      arguments: { query: "item 7", scope: "project", expand: true },
+      arguments: { query: "item 7", filter: "current", expand: true },
     });
     const ssEnv = parseResult(bySubstr);
     expect(ssEnv.ok).toBe(true);
@@ -163,7 +162,7 @@ describe("lesson_log_add / lesson_search (Phase A)", () => {
   });
 
   it("redacts an sk- canary to [REDACTED:openai-key] before persisting", async () => {
-    const { client, projectDb } = await bootProjectScope();
+    const { client } = await bootProjectScope();
     const canary = "sk-proj-abc12345XYZdef67890HIJKLMNopqrstuv";
     const res = await client.callTool({
       name: "lesson_log_add",
@@ -178,21 +177,13 @@ describe("lesson_log_add / lesson_search (Phase A)", () => {
     const content = env.content as { lesson_id: number; redaction_applied: boolean };
     expect(content.redaction_applied).toBe(true);
 
-    // Stored row contains the marker, not the key.
-    const row = projectDb
-      .prepare("SELECT observation FROM lessons WHERE id=?")
-      .get(content.lesson_id) as { observation: string };
-    expect(row.observation).toContain("[REDACTED:openai-key]");
-    expect(row.observation).not.toContain(canary);
-
-    // Same check against the global mirror.
     const globalDb = openGlobalLessonsDb({ path: lessonsDbPath });
     try {
-      const groow = globalDb
-        .prepare("SELECT observation FROM lessons ORDER BY id DESC LIMIT 1")
-        .get() as { observation: string };
-      expect(groow.observation).toContain("[REDACTED:openai-key]");
-      expect(groow.observation).not.toContain(canary);
+      const row = globalDb
+        .prepare("SELECT observation FROM lessons WHERE id = ?")
+        .get(content.lesson_id) as { observation: string };
+      expect(row.observation).toContain("[REDACTED:openai-key]");
+      expect(row.observation).not.toContain(canary);
     } finally {
       globalDb.close();
     }
@@ -214,114 +205,82 @@ describe("lesson_log_add / lesson_search (Phase A)", () => {
     expect(text).toMatch(/__bogus/);
   });
 
-  it("tracks mirror_status='mirrored' on successful lesson_log_add writes (#42)", async () => {
-    const { client, projectDb } = await bootProjectScope();
+  it("fails with E_SCOPE_DENIED when config.lessons.global_db_path is null", async () => {
+    const { client } = await bootProjectScope({ global_db_path: null });
     const res = await client.callTool({
       name: "lesson_log_add",
-      arguments: { title: "mirror-tracking-1", observation: "first write", tags: ["m42"] },
+      arguments: { title: "disabled-write", observation: "store off", tags: ["m41"] },
     });
     const env = parseResult(res);
-    expect(env.ok).toBe(true);
-    const { lesson_id } = env.content as { lesson_id: number };
-    const row = projectDb
-      .prepare("SELECT mirror_status FROM lessons WHERE id = ?")
-      .get(lesson_id) as { mirror_status: string };
-    expect(row.mirror_status).toBe("mirrored");
+    expect(env.ok).toBe(false);
+    expect(env.code).toBe("E_SCOPE_DENIED");
   });
 
-  it("leaves mirror_status='pending' when config.lessons.global_db_path is null (#42)", async () => {
-    // Re-boot with the mirror disabled.
-    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
-    const dbPath = join(home, ".vcf", "projects", "disabled-demo", "project.db");
-    const projectDb = openProjectDb({ path: dbPath });
-    projectDb
-      .prepare(
-        `INSERT INTO project (id, name, root_path, state, created_at, updated_at)
-         VALUES (1, 'disabled-demo', ?, 'building', ?, ?)`,
-      )
-      .run(projectDir, Date.now(), Date.now());
-    const resolved: ResolvedScope = {
-      scope: "project",
-      projectRoot: projectDir,
-      projectSlug: "disabled-demo",
-      projectDbPath: dbPath,
-    };
-    const config = ConfigSchema.parse({
-      version: 1,
-      workspace: {
-        allowed_roots: [workRoot],
-        ideas_dir: join(workRoot, "ideas"),
-        specs_dir: join(workRoot, "specs"),
-      },
-      endpoints: [
-        {
-          name: "local-stub",
-          provider: "local-stub",
-          base_url: "http://127.0.0.1:1",
-          trust_level: "local",
-        },
-      ],
-      kb: { root: kbRoot },
-      lessons: { global_db_path: null },
-    });
-    resetGlobalLessonsCache();
-    const server = createServer({
-      scope: "project",
-      resolved,
-      config,
-      globalDb,
-      projectDb,
-      homeDir: home,
-    });
-    const [a, b] = InMemoryTransport.createLinkedPair();
-    await server.connect(a);
-    const client = new Client({ name: "t2", version: "0" }, { capabilities: {} });
-    await client.connect(b);
-
-    const res = await client.callTool({
+  it("filter=current only returns this project's lessons", async () => {
+    const { client } = await bootProjectScope();
+    await client.callTool({
       name: "lesson_log_add",
-      arguments: { title: "disabled-write", observation: "mirror off", tags: ["m42"] },
+      arguments: { title: "mine", observation: "this project", tags: ["t"] },
     });
-    const env = parseResult(res);
-    expect(env.ok).toBe(true);
-    const { lesson_id, mirror_status } = env.content as {
-      lesson_id: number;
-      mirror_status: string;
-    };
-    expect(mirror_status).toBe("disabled-by-config");
-    const row = projectDb
-      .prepare("SELECT mirror_status FROM lessons WHERE id = ?")
-      .get(lesson_id) as { mirror_status: string };
-    expect(row.mirror_status).toBe("pending");
+    const globalDb = openGlobalLessonsDb({ path: lessonsDbPath });
+    try {
+      globalDb
+        .prepare(
+          `INSERT INTO lessons (project_root, title, observation, scope, tags_json, created_at)
+           VALUES (?, ?, ?, 'project', '[]', ?)`,
+        )
+        .run("/other/project", "not mine", "from elsewhere", Date.now());
+    } finally {
+      globalDb.close();
+    }
+
+    const current = await client.callTool({
+      name: "lesson_search",
+      arguments: { filter: "current", query: "mine" },
+    });
+    const currentEnv = parseResult(current);
+    expect(currentEnv.ok).toBe(true);
+    const currentContent = currentEnv.content as { matches: Array<{ title: string }> };
+    expect(currentContent.matches.map((m) => m.title)).toEqual(["mine"]);
+
+    const all = await client.callTool({
+      name: "lesson_search",
+      arguments: { filter: "all" },
+    });
+    const allContent = parseResult(all).content as { matches: Array<{ title: string }> };
+    expect(allContent.matches.length).toBeGreaterThanOrEqual(2);
+    expect(allContent.matches.some((m) => m.title === "not mine")).toBe(true);
   });
 
-  it("project-DB migration v2 → v3 is idempotent on re-open", async () => {
-    // Fresh project DB, migrate once.
+  it("project-DB migration v8 removes the lessons + feedback tables", async () => {
     const dbPath = join(workRoot, ".vcf", "idem.db");
     await mkdir(join(workRoot, ".vcf"), { recursive: true });
     const db = new DatabaseSync(dbPath, { enableForeignKeyConstraints: true });
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA foreign_keys = ON");
     runMigrations(db, PROJECT_MIGRATIONS);
-    const v1 = db
-      .prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version=3")
+    const v8 = db
+      .prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version=8")
       .get() as { n: number };
-    expect(v1.n).toBe(1);
+    expect(v8.n).toBe(1);
+    const lessonsT = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='lessons'")
+      .get() as { name?: string } | undefined;
+    expect(lessonsT?.name).toBeUndefined();
+    const feedbackT = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='feedback'")
+      .get() as { name?: string } | undefined;
+    expect(feedbackT?.name).toBeUndefined();
     db.close();
 
-    // Re-open: migrate should no-op.
     const db2 = new DatabaseSync(dbPath, { enableForeignKeyConstraints: true });
     db2.exec("PRAGMA journal_mode = WAL");
     db2.exec("PRAGMA foreign_keys = ON");
     runMigrations(db2, PROJECT_MIGRATIONS);
-    const v2 = db2
-      .prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version=3")
+    const v8b = db2
+      .prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version=8")
       .get() as { n: number };
-    expect(v2.n).toBe(1);
-    // Lessons table still present.
-    const t = db2.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='lessons'")
-      .get() as { name?: string } | undefined;
-    expect(t?.name).toBe("lessons");
+    expect(v8b.n).toBe(1);
     db2.close();
   });
 });

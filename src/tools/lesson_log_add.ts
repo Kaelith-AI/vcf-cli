@@ -1,15 +1,18 @@
-// lesson_log_add — project scope.
+// lesson_log_add — project scope; writes to the global lessons store.
 //
-// Append a lesson to the project lesson log and mirror it into the global
-// lessons DB so a vibe coder can search across projects. Per plan:
-//  - title + observation required; everything else optional with defaults.
-//  - lesson text runs through `redact()` before any persist.
-//  - one audit row per call via `runTool` finally hook.
-// Regression surface: the input schema is `.strict()` and .parse() runs inside
-// the handler so an unknown key fails with `E_VALIDATION`.
+// Lessons are improvement-cycle data, not project-lifecycle data (followup
+// #41). Every lesson lands in the single global store at the resolved
+// `config.lessons.global_db_path` (default ~/.vcf/lessons.db) tagged with
+// the originating project_root. Retrospectives and self-improvement passes
+// read cross-project from this one store.
+//
+// Privacy escape hatch: setting `config.lessons.global_db_path: null`
+// disables lessons entirely — lesson_log_add fails with E_SCOPE_DENIED so
+// the caller knows the boundary is shut. Operators running VCF on a shared
+// workstation alongside sensitive / NDA work use this to keep the lesson
+// log off.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { ServerDeps } from "../server.js";
 import { success, runTool } from "../envelope.js";
@@ -29,7 +32,7 @@ const LessonLogAddInput = z
     observation: z.string().min(1).max(10_000),
     context: z.string().max(4_000).optional(),
     actionable_takeaway: z.string().max(4_000).optional(),
-    scope: z.enum(["project", "universal"]).optional(),
+    scope: z.enum(["project", "universal"]).default("project"),
     stage: z
       .enum(["draft", "planning", "building", "testing", "reviewing", "shipping", "shipped"])
       .optional(),
@@ -46,7 +49,7 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
     {
       title: "Log Lesson",
       description:
-        "Append a lesson to this project's log and mirror it to the global lessons DB. Redacts secrets pre-store. Returns the lesson id + a summary; pass expand=true to receive the stored payload.",
+        "Append a lesson to the global improvement-cycle store, tagged with this project's root. Redacts secrets pre-store. Returns the lesson id + a summary; pass expand=true to receive the stored payload.",
       inputSchema: LessonLogAddInput,
     },
     async (args: LessonLogAddArgs) => {
@@ -59,15 +62,19 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
           const projectRoot = readProjectRoot(deps);
           if (!projectRoot) throw new McpError("E_STATE_INVALID", "project row missing");
 
-          const scope = parsed.scope ?? deps.config.lessons.default_scope;
+          const globalDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
+          if (globalDb === null) {
+            throw new McpError(
+              "E_SCOPE_DENIED",
+              `lesson_log_add is disabled: config.lessons.global_db_path is null. ` +
+                `Re-enable the store in ~/.vcf/config.yaml to log lessons.`,
+            );
+          }
+
+          const scope = parsed.scope;
           const stage = parsed.stage ?? null;
           const createdAt = Date.now();
 
-          // Redact before persist — lesson text may contain session-captured
-          // secrets (API keys the caller pasted while debugging, JWTs from
-          // request logs, .env-style assignments). The redact pass also runs
-          // again inside the audit hook, so secrets never hit either DB row
-          // nor either hash.
           const redactedBody = redact({
             title: parsed.title,
             observation: parsed.observation,
@@ -87,118 +94,40 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
 
           const tagsJson = JSON.stringify(parsed.tags);
 
-          // Project DB write. mirror_status starts pending and flips to
-          // 'mirrored' on a successful global write or 'failed' on a DB
-          // error below. Rows that stay non-mirrored are targets for
-          // `vcf lessons reconcile` (followup #42). When the mirror is
-          // disabled by config we leave it pending so a later re-enable
-          // + reconcile picks them up.
-          const projectInsert = deps.projectDb.prepare(
-            `INSERT INTO lessons
-               (title, context, observation, actionable_takeaway, scope, stage, tags_json, created_at, mirror_status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-          );
-          const projectRun = projectInsert.run(
-            redactedBody.title,
-            redactedBody.context,
-            redactedBody.observation,
-            redactedBody.actionable_takeaway,
-            scope,
-            stage,
-            tagsJson,
-            createdAt,
-          );
-          const projectLessonId = Number(projectRun.lastInsertRowid);
-
-          // Global DB mirror. Possible outcomes:
-          //   - `disabled-by-config`: operator set `config.lessons.global_db_path: null`
-          //     OR `config.lessons.mirror_policy: "off"` to opt out of
-          //     cross-project mirroring. Skip cleanly, no error.
-          //   - `policy-suppressed`: mirror_policy='read-only' — the project
-          //     may query the mirror but this write is deliberately suppressed.
-          //   - success: write mirrored, id returned, project row flipped to 'mirrored'.
-          //   - failure: local write is authoritative; log the mirror error
-          //     into the envelope and audit but do not fail the tool call.
-          //     Project row is marked 'failed' so reconcile will retry it.
-          let globalLessonId: number | null = null;
-          let globalMirrorStatus:
-            | "ok"
-            | "disabled-by-config"
-            | "policy-suppressed"
-            | "failed" = "ok";
-          let globalMirrorError: string | null = null;
-          const mirrorPolicy = deps.config.lessons.mirror_policy;
-          const policyDisables = mirrorPolicy === "off";
-          const policySuppressesWrite =
-            mirrorPolicy === "read-only" || mirrorPolicy === "off";
-          const globalDb =
-            policyDisables ? null : getGlobalLessonsDb(deps.config.lessons.global_db_path);
-          if (globalDb === null) {
-            globalMirrorStatus = "disabled-by-config";
-            // Row stays mirror_status='pending' — a later reconcile after
-            // the operator re-enables the mirror will drain it.
-          } else if (policySuppressesWrite) {
-            globalMirrorStatus = "policy-suppressed";
-            // Row stays mirror_status='pending'. If the operator flips the
-            // policy later, `vcf lessons reconcile` drains the backlog.
-          } else {
-            try {
-              const globalRun = globalDb
-                .prepare(
-                  `INSERT INTO lessons
-                     (project_root, title, context, observation, actionable_takeaway, scope, stage, tags_json, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                )
-                .run(
-                  projectRoot,
-                  redactedBody.title,
-                  redactedBody.context,
-                  redactedBody.observation,
-                  redactedBody.actionable_takeaway,
-                  scope,
-                  stage,
-                  tagsJson,
-                  createdAt,
-                );
-              globalLessonId = Number(globalRun.lastInsertRowid);
-              deps.projectDb
-                .prepare(`UPDATE lessons SET mirror_status = 'mirrored' WHERE id = ?`)
-                .run(projectLessonId);
-            } catch (err) {
-              globalMirrorStatus = "failed";
-              globalMirrorError = err instanceof Error ? err.message : String(err);
-              try {
-                deps.projectDb
-                  .prepare(`UPDATE lessons SET mirror_status = 'failed' WHERE id = ?`)
-                  .run(projectLessonId);
-              } catch {
-                /* non-fatal bookkeeping */
-              }
-            }
-          }
+          const run = globalDb
+            .prepare(
+              `INSERT INTO lessons
+                 (project_root, title, context, observation, actionable_takeaway,
+                  scope, stage, tags_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              projectRoot,
+              redactedBody.title,
+              redactedBody.context,
+              redactedBody.observation,
+              redactedBody.actionable_takeaway,
+              scope,
+              stage,
+              tagsJson,
+              createdAt,
+            );
+          const lessonId = Number(run.lastInsertRowid);
 
           const summaryParts = [
-            `lesson #${projectLessonId} logged`,
+            `lesson #${lessonId} logged`,
             `scope=${scope}`,
             parsed.tags.length > 0 ? `tags=${parsed.tags.join(",")}` : "no-tags",
           ];
           if (redactionApplied) summaryParts.push("redaction-applied");
-          if (globalMirrorStatus === "disabled-by-config")
-            summaryParts.push("mirror-disabled-by-config");
-          else if (globalMirrorStatus === "policy-suppressed")
-            summaryParts.push("mirror-policy-suppressed");
-          else if (globalMirrorStatus === "failed") summaryParts.push("mirror-failed");
 
           return success([], summaryParts.join("; "), {
             content: {
-              lesson_id: projectLessonId,
-              global_lesson_id: globalLessonId,
+              lesson_id: lessonId,
               scope,
               stage,
               tags: parsed.tags,
               redaction_applied: redactionApplied,
-              mirror_status: globalMirrorStatus,
-              global_mirror_error: globalMirrorError,
               created_at: createdAt,
               ...(parsed.expand
                 ? {
@@ -236,4 +165,3 @@ function readProjectRoot(deps: ServerDeps): string | null {
 }
 
 export { LessonLogAddInput };
-export type { DatabaseSync as LessonsDb };

@@ -49,9 +49,12 @@ export async function runLifecycleReport(opts: {
     (include as (typeof LIFECYCLE_SECTION_ORDER)[number][] | undefined) ??
     [...LIFECYCLE_SECTION_ORDER];
 
+  const { getGlobalLessonsDb } = await import("../db/globalLessons.js");
+  const lessonsDb = getGlobalLessonsDb(config.lessons.global_db_path);
   const report = buildStructuredReport({
     projectDb,
     globalDb,
+    lessonsDb,
     projectRoot: target,
     include: resolvedInclude,
     auditRowCap: config.report.audit_rows_per_section,

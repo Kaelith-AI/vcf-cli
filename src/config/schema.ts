@@ -323,30 +323,22 @@ export type Outputs = z.infer<typeof OutputsSchema>;
 
 export const LessonsSchema = z
   .object({
-    // Absolute path to the global lessons DB. `~` and `${ENV_VAR}` are
-    // expanded at resolve time (loader + DB opener), not here, so accept a
-    // loose string. Default resolution: `~/.vcf/lessons.db`.
+    // Absolute path to the global lessons + feedback store. `~` and
+    // `${ENV_VAR}` are expanded at resolve time (loader + DB opener),
+    // not here, so accept a loose string. Default resolution:
+    // `~/.vcf/lessons.db`.
     //
-    // Explicit `null` disables the cross-project mirror entirely: lesson_log_add
-    // skips the mirror write (project DB remains authoritative); lesson_search
-    // rejects `scope: "global" | "all"` with E_SCOPE_DENIED. Operators running
-    // VCF on a shared workstation alongside sensitive / NDA work use this to
-    // keep each project's lessons local.
+    // Followup #41: lessons and feedback are improvement-cycle data (not
+    // project-lifecycle data) and live in one global store tagged with
+    // project_root. The old mirror_policy and default_scope knobs are gone
+    // — lessons are always global. `lesson_search` uses its `filter` arg
+    // (current | universal | all) to select which rows to return.
+    //
+    // Explicit `null` disables the store entirely — lesson_log_add,
+    // feedback_add, lesson_search, and feedback_list all fail with
+    // E_SCOPE_DENIED. Operators running VCF on a shared workstation
+    // alongside sensitive / NDA work use this to keep the store off.
     global_db_path: z.union([z.string().min(1).max(4096), z.null()]).optional(),
-    // Fallback scope for `lesson_log_add` when the caller omits `scope`.
-    // Most lessons are project-specific; promote to `universal` only when
-    // the observation is cross-project guidance.
-    default_scope: z.enum(["project", "universal"]).default("project"),
-    // Followup #41: finer-grained isolation than global_db_path: null.
-    //   'write-and-read' — normal (default). Writes mirror out; cross-scope reads return both.
-    //   'write-only'     — writes mirror out; cross-scope reads refuse with E_SCOPE_DENIED.
-    //   'read-only'      — writes stay local (envelope surfaces 'policy-suppressed'); cross-scope reads work.
-    //   'off'            — neither writes nor reads (same as global_db_path: null, but separable from path).
-    // Per-project override is a future followup (needs a per-project
-    // config merge); today this knob is global-only.
-    mirror_policy: z
-      .enum(["write-and-read", "write-only", "read-only", "off"])
-      .default("write-and-read"),
   })
   .strict();
 
@@ -454,7 +446,7 @@ export const ConfigSchema = z
     audit: AuditSchema.default({ full_payload_storage: false, personal_data: { allow_list: [] } }),
     embeddings: EmbeddingsSchema.optional(),
     defaults: DefaultsSchema.optional(),
-    lessons: LessonsSchema.default({ default_scope: "project", mirror_policy: "write-and-read" }),
+    lessons: LessonsSchema.default({}),
     outputs: OutputsSchema.default({
       plans_dir: "plans",
       decisions_dir: "plans/decisions",

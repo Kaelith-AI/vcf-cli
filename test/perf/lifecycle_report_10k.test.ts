@@ -31,6 +31,7 @@ describe("lifecycle_report perf @ 10k audit rows", () => {
   let projectDir: string;
   let projectDb: DatabaseSync;
   let globalDb: DatabaseSync;
+  let lessonsDb: DatabaseSync;
 
   beforeAll(async () => {
     workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-lcperf-")));
@@ -161,13 +162,22 @@ describe("lifecycle_report perf @ 10k audit rows", () => {
     }
     projectDb.exec("COMMIT");
 
-    const insertLesson = projectDb.prepare(
-      `INSERT INTO lessons (title, observation, scope, stage, tags_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+    // #41: lessons live in the global store, tagged with project_root.
+    const { GLOBAL_LESSONS_MIGRATIONS } = await import("../../src/db/globalLessons.js");
+    lessonsDb = new DatabaseSync(join(home, ".vcf", "lessons.db"), {
+      enableForeignKeyConstraints: true,
+    });
+    lessonsDb.exec("PRAGMA journal_mode = WAL");
+    lessonsDb.exec("PRAGMA synchronous = NORMAL");
+    runMigrations(lessonsDb, GLOBAL_LESSONS_MIGRATIONS);
+    const insertLesson = lessonsDb.prepare(
+      `INSERT INTO lessons (project_root, title, observation, scope, stage, tags_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
-    projectDb.exec("BEGIN");
+    lessonsDb.exec("BEGIN");
     for (let i = 0; i < LESSONS; i++) {
       insertLesson.run(
+        projectDir,
         `lesson ${i}`,
         `observation body ${i}`,
         i % 5 === 0 ? "universal" : "project",
@@ -176,12 +186,17 @@ describe("lifecycle_report perf @ 10k audit rows", () => {
         now - i * 60_000,
       );
     }
-    projectDb.exec("COMMIT");
+    lessonsDb.exec("COMMIT");
   }, 120_000);
 
   afterAll(async () => {
     projectDb.close();
     globalDb.close();
+    try {
+      lessonsDb.close();
+    } catch {
+      /* noop */
+    }
     await rm(workRoot, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
   });
@@ -191,6 +206,7 @@ describe("lifecycle_report perf @ 10k audit rows", () => {
     const report = buildStructuredReport({
       projectDb,
       globalDb,
+      lessonsDb,
       projectRoot: projectDir,
       include: [...LIFECYCLE_SECTION_ORDER],
       auditRowCap: 500,
@@ -232,6 +248,7 @@ describe("lifecycle_report perf @ 10k audit rows", () => {
     const report = buildStructuredReport({
       projectDb,
       globalDb,
+      lessonsDb,
       projectRoot: projectDir,
       include: [...LIFECYCLE_SECTION_ORDER],
       auditRowCap: 500,

@@ -1,10 +1,14 @@
-// feedback_add / feedback_list — project scope (followup #18).
+// feedback_add / feedback_list — project scope, global store (followup #41).
 //
-// Lightweight ad-hoc channel for "sigh, that was annoying" observations
-// that don't meet the structured threshold for lesson_log (which wants
-// context + observation + actionable_takeaway). Retrospectives read
-// feedback alongside lessons and decide case-by-case whether to promote a
-// note to a lesson, file a bug, or drop.
+// Lightweight ad-hoc channel for "sigh, that was annoying" observations that
+// don't meet the structured threshold for lesson_log (which wants context +
+// observation + actionable_takeaway). Retrospectives read feedback alongside
+// lessons from the same global store to triage case-by-case.
+//
+// Feedback is improvement-cycle data, not project-lifecycle data, so it
+// lives in the global store (~/.vcf/lessons.db, `feedback` table) tagged
+// with project_root. Disabling the store via
+// `config.lessons.global_db_path: null` disables feedback too.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -12,6 +16,7 @@ import type { ServerDeps } from "../server.js";
 import { success, runTool } from "../envelope.js";
 import { writeAudit, redact } from "../util/audit.js";
 import { McpError } from "../errors.js";
+import { getGlobalLessonsDb } from "../db/globalLessons.js";
 
 const FeedbackAddInput = z
   .object({
@@ -30,6 +35,7 @@ const FeedbackListInput = z
       .enum(["draft", "planning", "building", "testing", "reviewing", "shipping", "shipped"])
       .optional(),
     urgency: z.enum(["low", "normal", "high"]).optional(),
+    filter: z.enum(["current", "all"]).default("current"),
     limit: z.number().int().positive().max(500).default(50),
     expand: z.boolean().default(false),
   })
@@ -37,6 +43,7 @@ const FeedbackListInput = z
 
 interface FeedbackRow {
   id: number;
+  project_root: string;
   note: string;
   stage: string | null;
   urgency: string | null;
@@ -49,7 +56,7 @@ export function registerFeedbackAdd(server: McpServer, deps: ServerDeps): void {
     {
       title: "Add Feedback",
       description:
-        "Append a one-line feedback note to the project. Lightweight alternative to lesson_log_add — no required context, no takeaway. Retrospectives triage feedback to decide whether it becomes a lesson, bug, or gets dropped.",
+        "Append a one-line feedback note to the global improvement-cycle store, tagged with this project's root. Lightweight alternative to lesson_log_add — no required context, no takeaway. Retrospectives triage feedback to decide whether it becomes a lesson, bug, or gets dropped.",
       inputSchema: FeedbackAddInput,
     },
     async (args: z.infer<typeof FeedbackAddInput>) => {
@@ -59,15 +66,34 @@ export function registerFeedbackAdd(server: McpServer, deps: ServerDeps): void {
             throw new McpError("E_STATE_INVALID", "feedback_add requires project scope");
           }
           const parsed = FeedbackAddInput.parse(args);
+          const projectRoot = readProjectRoot(deps);
+          if (!projectRoot) throw new McpError("E_STATE_INVALID", "project row missing");
+
+          const globalDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
+          if (globalDb === null) {
+            throw new McpError(
+              "E_SCOPE_DENIED",
+              `feedback_add is disabled: config.lessons.global_db_path is null. ` +
+                `Re-enable the store in ~/.vcf/config.yaml to log feedback.`,
+            );
+          }
+
           const redactedNote = redact(parsed.note) as string;
           const redactionApplied = redactedNote !== parsed.note;
 
           const createdAt = Date.now();
-          const run = deps.projectDb
+          const run = globalDb
             .prepare(
-              `INSERT INTO feedback (note, stage, urgency, created_at) VALUES (?, ?, ?, ?)`,
+              `INSERT INTO feedback (project_root, note, stage, urgency, created_at)
+                 VALUES (?, ?, ?, ?, ?)`,
             )
-            .run(redactedNote, parsed.stage ?? null, parsed.urgency ?? null, createdAt);
+            .run(
+              projectRoot,
+              redactedNote,
+              parsed.stage ?? null,
+              parsed.urgency ?? null,
+              createdAt,
+            );
           const feedbackId = Number(run.lastInsertRowid);
 
           const summaryParts = [
@@ -109,7 +135,7 @@ export function registerFeedbackList(server: McpServer, deps: ServerDeps): void 
     {
       title: "List Feedback",
       description:
-        "List recent feedback notes for this project. Newest first; pass stage / urgency to filter. expand=true returns the note body; otherwise only ids + metadata.",
+        "List feedback notes from the global store. filter=current (default) scopes to this project; filter=all reads cross-project. Newest first; pass stage / urgency to further filter. expand=true returns the note body.",
       inputSchema: FeedbackListInput,
     },
     async (args: z.infer<typeof FeedbackListInput>) => {
@@ -119,8 +145,28 @@ export function registerFeedbackList(server: McpServer, deps: ServerDeps): void 
             throw new McpError("E_STATE_INVALID", "feedback_list requires project scope");
           }
           const parsed = FeedbackListInput.parse(args);
+          const projectRoot = readProjectRoot(deps);
+
+          const globalDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
+          if (globalDb === null) {
+            throw new McpError(
+              "E_SCOPE_DENIED",
+              `feedback_list is disabled: config.lessons.global_db_path is null. ` +
+                `Re-enable the store in ~/.vcf/config.yaml to read feedback.`,
+            );
+          }
+
           const clauses: string[] = [];
           const params: Array<string | number> = [];
+          if (parsed.filter === "current") {
+            if (!projectRoot) {
+              return success([], "feedback_list: 0 entries (no project root)", {
+                content: { entries: [], returned: 0 },
+              });
+            }
+            clauses.push("project_root = ?");
+            params.push(projectRoot);
+          }
           if (parsed.stage) {
             clauses.push("stage = ?");
             params.push(parsed.stage);
@@ -130,20 +176,21 @@ export function registerFeedbackList(server: McpServer, deps: ServerDeps): void 
             params.push(parsed.urgency);
           }
           const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-          const rows = deps.projectDb
+          const rows = globalDb
             .prepare(
-              `SELECT id, note, stage, urgency, created_at FROM feedback ${where}
-                 ORDER BY created_at DESC LIMIT ?`,
+              `SELECT id, project_root, note, stage, urgency, created_at FROM feedback ${where}
+                 ORDER BY created_at DESC, id DESC LIMIT ?`,
             )
             .all(...params, parsed.limit) as unknown as FeedbackRow[];
 
           return success(
             [],
-            `feedback_list: ${rows.length} entr${rows.length === 1 ? "y" : "ies"} (stage=${parsed.stage ?? "∅"}, urgency=${parsed.urgency ?? "∅"})`,
+            `feedback_list: ${rows.length} entr${rows.length === 1 ? "y" : "ies"} (filter=${parsed.filter}, stage=${parsed.stage ?? "∅"}, urgency=${parsed.urgency ?? "∅"})`,
             {
               content: {
                 entries: rows.map((r) => ({
                   id: r.id,
+                  project_root: r.project_root,
                   stage: r.stage,
                   urgency: r.urgency,
                   created_at: r.created_at,
@@ -151,9 +198,7 @@ export function registerFeedbackList(server: McpServer, deps: ServerDeps): void 
                 })),
                 returned: rows.length,
               },
-              ...(parsed.expand
-                ? {}
-                : { expand_hint: "Pass expand=true for note bodies." }),
+              ...(parsed.expand ? {} : { expand_hint: "Pass expand=true for note bodies." }),
             },
           );
         },

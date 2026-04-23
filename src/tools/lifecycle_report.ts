@@ -29,6 +29,7 @@ import { runTool, success } from "../envelope.js";
 import { writeAudit, redact } from "../util/audit.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { resolveOutputs } from "../util/outputs.js";
+import { getGlobalLessonsDb } from "../db/globalLessons.js";
 import { McpError } from "../errors.js";
 import { callChatCompletion, LlmError, type ChatMessage } from "../util/llmClient.js";
 import {
@@ -85,9 +86,11 @@ export function registerLifecycleReport(server: McpServer, deps: ServerDeps): vo
           if (!root) throw new McpError("E_STATE_INVALID", "project row missing");
 
           const include: LifecycleSectionName[] = parsed.include ?? [...LIFECYCLE_SECTION_ORDER];
+          const lessonsDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
           const report = buildStructuredReport({
             projectDb: deps.projectDb,
             globalDb: deps.globalDb,
+            lessonsDb,
             projectRoot: root,
             include,
             auditRowCap: deps.config.report.audit_rows_per_section,
@@ -167,6 +170,8 @@ export function registerLifecycleReport(server: McpServer, deps: ServerDeps): vo
 interface BuildOpts {
   projectDb: DatabaseSync;
   globalDb: DatabaseSync;
+  /** Global lessons+feedback DB, or null when disabled via config.lessons.global_db_path: null. */
+  lessonsDb: DatabaseSync | null;
   projectRoot: string;
   include: LifecycleSectionName[];
   auditRowCap: number;
@@ -437,24 +442,36 @@ function buildBuildsSection(opts: BuildOpts): LifecycleSection {
 }
 
 function buildLessonsSection(opts: BuildOpts): LifecycleSection {
+  // #41: lessons live in the global store, tagged with project_root.
+  // When the store is disabled (global_db_path: null), the section reports
+  // zero rows rather than failing — lifecycle_report is a summary, not a
+  // strict check.
+  if (opts.lessonsDb === null) {
+    return { section: "lessons", count: 0, by_scope: {}, recent: [] };
+  }
   const total = (
-    opts.projectDb.prepare("SELECT COUNT(*) AS n FROM lessons").get() as { n: number }
+    opts.lessonsDb
+      .prepare("SELECT COUNT(*) AS n FROM lessons WHERE project_root = ?")
+      .get(opts.projectRoot) as { n: number }
   ).n;
-  const byScopeRows = opts.projectDb
-    .prepare("SELECT scope, COUNT(*) AS n FROM lessons GROUP BY scope ORDER BY n DESC")
-    .all() as unknown as Array<{ scope: string; n: number }>;
+  const byScopeRows = opts.lessonsDb
+    .prepare(
+      "SELECT scope, COUNT(*) AS n FROM lessons WHERE project_root = ? GROUP BY scope ORDER BY n DESC",
+    )
+    .all(opts.projectRoot) as unknown as Array<{ scope: string; n: number }>;
   const by_scope: Record<string, number> = {};
   for (const r of byScopeRows) by_scope[r.scope] = r.n;
 
   const recent = (
-    opts.projectDb
+    opts.lessonsDb
       .prepare(
         `SELECT id, title, scope, stage, tags_json, created_at
            FROM lessons
+           WHERE project_root = ?
            ORDER BY created_at DESC
            LIMIT ?`,
       )
-      .all(opts.recentCap) as unknown as Array<{
+      .all(opts.projectRoot, opts.recentCap) as unknown as Array<{
       id: number;
       title: string;
       scope: string;
