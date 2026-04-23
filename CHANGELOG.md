@@ -6,8 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+---
+
+## [0.6.1] — 2026-04-23
+
 Followup backlog sweep — a batch of correctness, refactor, and light-feature
-work across 11 items from `plans/2026-04-20-followups.md`.
+work across 14 items (11 full + 3 partial) from
+`plans/2026-04-20-followups.md`. Additive only; no breaking changes.
 
 ### Added
 
