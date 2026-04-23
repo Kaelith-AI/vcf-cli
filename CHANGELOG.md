@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+---
+
+## [0.6.0] — 2026-04-23
+
 **Phase F — cross-project admin surfaces + PM (admin) project concept.**
 Operator-requested feature set building on the 0.5.0 out-of-tree layout:
 move a project's directory, rename it, or re-point its registry
