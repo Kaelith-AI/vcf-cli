@@ -43,6 +43,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   `test/integration/lesson_mirror_disabled.test.ts`,
   `test/integration/lesson_mirror_policy.test.ts` — obsolete.
 
+### Added
+
+- **Review-step self-learning wiring (#19).** Reviewer overlays (`reviewer-code.md`,
+  `reviewer-security.md`, `reviewer-production.md` in vcf-kb) now document when
+  to call `lesson_log_add({stage: "reviewing", scope: "universal", ...})`
+  during a review pass — patterns that would generalize across projects, not
+  one-off findings. Carry-forward entries gain a `carried_count` field that
+  bumps by 1 each time `mergeCarryForward` carries an unresolved entry through
+  another stage; reviewers treat `carried_count ≥ 3` on a warning/blocker as
+  a drift signal and log it with `tags: ["carry-forward-drift"]`. Back-compat:
+  old YAML without the field parses as `carried_count: 0`.
+
 ---
 
 ## [0.6.2] — 2026-04-23

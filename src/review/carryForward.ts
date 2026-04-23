@@ -25,6 +25,15 @@ export interface CarryForwardEntry {
   stage: number;
   severity: "info" | "warning" | "blocker";
   text: string;
+  /**
+   * Number of stages this entry has been carried forward without resolution.
+   * 0 on first appearance, +1 per merge that preserves the entry. A reviewer
+   * observing carried_count ≥ 3 on a warning/blocker should treat it as a
+   * drift signal (followup #19) and consider `lesson_log_add` with
+   * `tags: ["carry-forward-drift"]`. Optional on parse for back-compat with
+   * pre-#19 carry-forward YAML.
+   */
+  carried_count?: number;
 }
 
 export type CarryForward = Record<CarryForwardSection, CarryForwardEntry[]>;
@@ -40,11 +49,23 @@ export function emptyCarryForward(): CarryForward {
   };
 }
 
-/** Merge a newer CarryForward into a prior one. Newer entries append. */
+/**
+ * Merge a newer CarryForward into a prior one. Prior entries carry through
+ * with `carried_count` bumped by 1 (drift signal, #19). Newer entries append
+ * at `carried_count: 0`.
+ */
 export function mergeCarryForward(prior: CarryForward, next: Partial<CarryForward>): CarryForward {
   const out = emptyCarryForward();
   for (const section of CARRY_FORWARD_SECTIONS) {
-    out[section] = [...prior[section], ...(next[section] ?? [])];
+    const carried = prior[section].map((e) => ({
+      ...e,
+      carried_count: (e.carried_count ?? 0) + 1,
+    }));
+    const fresh = (next[section] ?? []).map((e) => ({
+      carried_count: 0,
+      ...e,
+    }));
+    out[section] = [...carried, ...fresh];
   }
   return out;
 }
@@ -62,6 +83,9 @@ export function renderYaml(cf: CarryForward): string {
     for (const e of entries) {
       parts.push(`  - stage: ${e.stage}`);
       parts.push(`    severity: ${e.severity}`);
+      if ((e.carried_count ?? 0) > 0) {
+        parts.push(`    carried_count: ${e.carried_count}`);
+      }
       parts.push(`    text: ${JSON.stringify(e.text)}`);
     }
   }
