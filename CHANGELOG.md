@@ -45,6 +45,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- **Extensible review-type builder + research scaffolding (#21, #29).**
+  Three new global-scope MCP tools. Primary #21 shape per user's spec:
+  review types are meticulously crafted via a multi-subagent flow, not
+  simply templated.
+  - **`review_type_create`:** returns a 5-phase scaffolding prompt the
+    calling LLM uses to build a new review type end-to-end. Phase 1
+    dispatches a research subagent that proposes stage count + outline
+    (3-15 stages — 9 worked for the core types, shorter for narrow scopes
+    like skill authoring). Phase 2 dispatches one subagent per stage for
+    per-stage research. Phase 3 fans out per-stage fill-in subagents,
+    each working from the stage-N outline + the existing
+    code/security/production stage file as a quality-bar reference +
+    a basic template the subagent edits to fit the topic. Phase 4 calls
+    `review_type_apply`. Phase 5 dogfoods the new type against the
+    change that created it.
+  - **`review_type_apply`:** writes the stage files +
+    `reviewer-<name>.md` overlay to `<kb>/review-system/<name>/` and
+    `<kb>/reviewers/`. Does NOT mutate `config.review.categories` —
+    returns an operator-instructions string telling them what slug to
+    add. force=true overwrites existing files.
+  - **`research_compose` (#29 minimum-viable):** returns a scaffolding
+    prompt for multi-aspect KB-entry creation: one subagent per aspect,
+    structured findings with source references + publish dates,
+    assembled into a draft staged at `~/.vcf/kb-drafts/<run_id>/`.
+    Includes guardrails for the verify step (different model, different
+    endpoint) and the no-auto-merge rule (operator always promotes
+    staged drafts manually). `research_refresh` + `research_verify`
+    ship later as siblings.
 - **Stress + QA testing package (#23, #24).** Two new MCP tools shipped as
   a "testing package" — both configurable two ways, matching the
   scaffolding-prompt pattern established by review_prepare /

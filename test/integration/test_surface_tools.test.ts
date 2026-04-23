@@ -172,6 +172,97 @@ describe("test-surface tools (#12, #13, #14)", () => {
     expect(content.scaffolding_prompt).toContain("QA sweep");
   });
 
+  it("review_type_create returns a multi-phase scaffolding prompt", async () => {
+    // review_type_create is global-scope; the project-scope client above
+    // can't reach it. Spin up a separate global-scope client.
+    const config = ConfigSchema.parse({
+      version: 1,
+      workspace: {
+        allowed_roots: [workRoot],
+        ideas_dir: join(workRoot, "ideas"),
+        specs_dir: join(workRoot, "specs"),
+      },
+      endpoints: [
+        {
+          name: "local-stub",
+          provider: "local-stub",
+          base_url: "http://127.0.0.1:1",
+          trust_level: "local",
+        },
+      ],
+      kb: { root: join(home, ".vcf", "kb") },
+    });
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    const server = createServer({
+      scope: "global",
+      resolved: { scope: "global" },
+      config,
+      globalDb,
+      homeDir: home,
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const c = new Client({ name: "rt", version: "0" }, { capabilities: {} });
+    await c.connect(b);
+    const res = await c.callTool({
+      name: "review_type_create",
+      arguments: { name: "skill", topic: "skill authoring quality", expand: true },
+    });
+    const env = parseResult(res);
+    expect(env.ok).toBe(true);
+    const content = env.content as {
+      name: string;
+      scaffolding_prompt: string;
+      quality_reference: string;
+    };
+    expect(content.name).toBe("skill");
+    expect(content.quality_reference).toBe("code");
+    expect(content.scaffolding_prompt).toContain("Phase 1");
+    expect(content.scaffolding_prompt).toContain("Phase 4");
+    expect(content.scaffolding_prompt).toContain("review_type_apply");
+    await c.close();
+  });
+
+  it("review_type_create rejects names already in config.review.categories", async () => {
+    const config = ConfigSchema.parse({
+      version: 1,
+      workspace: {
+        allowed_roots: [workRoot],
+        ideas_dir: join(workRoot, "ideas"),
+        specs_dir: join(workRoot, "specs"),
+      },
+      endpoints: [
+        {
+          name: "local-stub",
+          provider: "local-stub",
+          base_url: "http://127.0.0.1:1",
+          trust_level: "local",
+        },
+      ],
+      kb: { root: join(home, ".vcf", "kb") },
+    });
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    const server = createServer({
+      scope: "global",
+      resolved: { scope: "global" },
+      config,
+      globalDb,
+      homeDir: home,
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const c = new Client({ name: "rt2", version: "0" }, { capabilities: {} });
+    await c.connect(b);
+    const res = await c.callTool({
+      name: "review_type_create",
+      arguments: { name: "code", topic: "already exists" },
+    });
+    const env = parseResult(res);
+    expect(env.ok).toBe(false);
+    expect(env.code).toBe("E_ALREADY_EXISTS");
+    await c.close();
+  });
+
   it("vibe_check flags `as any` + silent-catch + ts-ignore in source", async () => {
     const srcDir = join(projectDir, "src");
     await mkdir(srcDir, { recursive: true });

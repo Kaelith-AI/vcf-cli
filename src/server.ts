@@ -58,6 +58,9 @@ import { registerConformanceCheck } from "./tools/conformance_check.js";
 import { registerVibeCheck } from "./tools/vibe_check.js";
 import { registerTestStress } from "./tools/test_stress.js";
 import { registerTestQa } from "./tools/test_qa.js";
+import { registerReviewTypeCreate } from "./tools/review_type_create.js";
+import { registerReviewTypeApply } from "./tools/review_type_apply.js";
+import { registerResearchCompose } from "./tools/research_compose.js";
 import { registerProjectMove } from "./tools/project_move.js";
 import { registerProjectRename } from "./tools/project_rename.js";
 import { registerProjectRelocate } from "./tools/project_relocate.js";
@@ -182,6 +185,11 @@ export function createServer(deps: ServerDeps): McpServer {
     // Cross-project admin: role assignment lives at global scope because
     // it's a meta-operation on the registry itself, not on any one project.
     registerProjectSetRole(server, deps);
+    // #21 / #29: review-type builder + research compose — both are global
+    // because they touch the shared KB, not any one project's state.
+    registerReviewTypeCreate(server, deps);
+    registerReviewTypeApply(server, deps);
+    registerResearchCompose(server, deps);
   } else {
     // Project scope owns the full lifecycle.
     registerPortfolioStatus(server, deps);
