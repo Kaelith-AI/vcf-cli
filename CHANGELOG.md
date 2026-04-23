@@ -45,6 +45,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- **project_init_existing `strict` + `reconstruct` adoption modes (#20).**
+  `bypass` (default) stays unchanged. `strict` refuses to adopt unless the
+  project already has a spec, a plan, and a manifest — the registry stays
+  untouched when validation fails, so a strict run is safe to retry.
+  `reconstruct` adopts the project in state `draft` and returns a
+  scaffolding prompt (in `content.reconstruct_prompt`) that the calling
+  LLM uses to infer a *backwards-facing* spec from README + source +
+  git log, then call `spec_template` + `spec_save`. Planning for future
+  changes is forward-facing and happens separately after reconstruct —
+  no plan is created at adoption time.
 - **Review-step self-learning wiring (#19).** Reviewer overlays (`reviewer-code.md`,
   `reviewer-security.md`, `reviewer-production.md` in vcf-kb) now document when
   to call `lesson_log_add({stage: "reviewing", scope: "universal", ...})`

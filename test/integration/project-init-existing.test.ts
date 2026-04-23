@@ -216,3 +216,172 @@ describe("project_init_existing (bypass mode)", () => {
     expect(row.state).toBe("draft");
   });
 });
+
+describe("project_init_existing (strict mode, #20)", () => {
+  let workRoot: string;
+  let home: string;
+
+  beforeEach(async () => {
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-adoptstrict-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-adoptstricth-")));
+    await mkdir(join(home, ".vcf"), { recursive: true });
+  });
+  afterEach(async () => {
+    closeTrackedDbs();
+    await rm(workRoot, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
+    await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
+  });
+
+  function baseConfig() {
+    return ConfigSchema.parse({
+      version: 1,
+      workspace: {
+        allowed_roots: [workRoot],
+        ideas_dir: join(workRoot, "ideas"),
+        specs_dir: join(workRoot, "specs"),
+      },
+      endpoints: [
+        {
+          name: "local-stub",
+          provider: "local-stub",
+          base_url: "http://127.0.0.1:1",
+          trust_level: "local",
+        },
+      ],
+      kb: { root: join(home, ".vcf", "kb") },
+    });
+  }
+
+  async function connect(globalDb: ReturnType<typeof openGlobalDb>) {
+    const config = baseConfig();
+    const resolved: ResolvedScope = { scope: "global" };
+    const server = createServer({ scope: "global", resolved, config, globalDb, homeDir: home });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const client = new Client({ name: "t", version: "0" }, { capabilities: {} });
+    await client.connect(b);
+    return client;
+  }
+
+  it("fails with E_STATE_INVALID when spec/plan/manifest are absent", async () => {
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    const client = await connect(globalDb);
+    const target = join(workRoot, "empty-proj");
+    await mkdir(target, { recursive: true });
+
+    const env = parseResult(
+      await client.callTool({
+        name: "project_init_existing",
+        arguments: { project_path: target, mode: "strict" },
+      }),
+    );
+    expect(env.ok).toBe(false);
+    expect(env.code).toBe("E_STATE_INVALID");
+    // Registry stays untouched on strict failure.
+    const registered = getProjectByRoot(globalDb, target);
+    expect(registered).toBeNull();
+  });
+
+  it("adopts successfully when all three paper-trail artifacts are present", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    const client = await connect(globalDb);
+    const target = join(workRoot, "complete-proj");
+    await mkdir(join(target, "plans"), { recursive: true });
+    await mkdir(join(target, "specs"), { recursive: true });
+    await writeFile(join(target, "specs", "thing.md"), "# spec\n");
+    await writeFile(join(target, "plans", "thing-plan.md"), "# plan\n");
+    await writeFile(join(target, "plans", "thing-manifest.md"), "# manifest\n");
+
+    const env = parseResult(
+      await client.callTool({
+        name: "project_init_existing",
+        arguments: { project_path: target, mode: "strict", expand: true },
+      }),
+    );
+    expect(env.ok).toBe(true);
+    const content = env.content as {
+      strict_audit?: { spec_paths: string[]; plan_paths: string[]; manifest_paths: string[] };
+    };
+    expect(content.strict_audit?.spec_paths.length).toBeGreaterThan(0);
+    expect(content.strict_audit?.plan_paths.length).toBeGreaterThan(0);
+    expect(content.strict_audit?.manifest_paths.length).toBeGreaterThan(0);
+    const registered = getProjectByRoot(globalDb, target);
+    expect(registered).not.toBeNull();
+  });
+});
+
+describe("project_init_existing (reconstruct mode, #20)", () => {
+  let workRoot: string;
+  let home: string;
+
+  beforeEach(async () => {
+    workRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-adoptrec-")));
+    home = await realpath(await mkdtemp(join(tmpdir(), "vcf-adoptrech-")));
+    await mkdir(join(home, ".vcf"), { recursive: true });
+  });
+  afterEach(async () => {
+    closeTrackedDbs();
+    await rm(workRoot, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
+    await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
+  });
+
+  async function connect(globalDb: ReturnType<typeof openGlobalDb>) {
+    const config = ConfigSchema.parse({
+      version: 1,
+      workspace: {
+        allowed_roots: [workRoot],
+        ideas_dir: join(workRoot, "ideas"),
+        specs_dir: join(workRoot, "specs"),
+      },
+      endpoints: [
+        {
+          name: "local-stub",
+          provider: "local-stub",
+          base_url: "http://127.0.0.1:1",
+          trust_level: "local",
+        },
+      ],
+      kb: { root: join(home, ".vcf", "kb") },
+    });
+    const resolved: ResolvedScope = { scope: "global" };
+    const server = createServer({ scope: "global", resolved, config, globalDb, homeDir: home });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const client = new Client({ name: "t", version: "0" }, { capabilities: {} });
+    await client.connect(b);
+    return client;
+  }
+
+  it("adopts in state=draft and returns a reconstruct_prompt for the calling LLM", async () => {
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    const client = await connect(globalDb);
+    const target = join(workRoot, "legacy-rec");
+    await mkdir(target, { recursive: true });
+
+    const env = parseResult(
+      await client.callTool({
+        name: "project_init_existing",
+        arguments: { project_path: target, mode: "reconstruct", expand: true },
+      }),
+    );
+    expect(env.ok).toBe(true);
+    const content = env.content as {
+      mode: string;
+      state: string;
+      reconstruct_prompt: string;
+    };
+    expect(content.mode).toBe("reconstruct");
+    expect(content.state).toBe("draft");
+    expect(content.reconstruct_prompt).toContain("spec_template");
+    expect(content.reconstruct_prompt).toContain("spec_save");
+    expect(content.reconstruct_prompt).toContain(target);
+
+    // Registry was written — reconstruct adopts first, prompts second.
+    const registered = getProjectByRoot(globalDb, target);
+    expect(registered).not.toBeNull();
+    const pdb = openProjectDb({ path: join(home, ".vcf", "projects", "legacy-rec", "project.db") });
+    const row = pdb.prepare("SELECT state FROM project WHERE id = 1").get() as { state: string };
+    expect(row.state).toBe("draft");
+  });
+});
