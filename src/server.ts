@@ -56,6 +56,8 @@ import { registerCycleStatus } from "./tools/cycle_status.js";
 import { registerTestAddMissingCase } from "./tools/test_add_missing_case.js";
 import { registerConformanceCheck } from "./tools/conformance_check.js";
 import { registerVibeCheck } from "./tools/vibe_check.js";
+import { registerTestStress } from "./tools/test_stress.js";
+import { registerTestQa } from "./tools/test_qa.js";
 import { registerProjectMove } from "./tools/project_move.js";
 import { registerProjectRename } from "./tools/project_rename.js";
 import { registerProjectRelocate } from "./tools/project_relocate.js";
@@ -210,6 +212,8 @@ export function createServer(deps: ServerDeps): McpServer {
     registerTestAddMissingCase(server, deps);
     registerConformanceCheck(server, deps);
     registerVibeCheck(server, deps);
+    registerTestStress(server, deps);
+    registerTestQa(server, deps);
     // PM-only admin tools: registered when the current project carries
     // role='pm' in the global registry. Non-PM sessions never see these.
     if (deps.resolved.projectRole === "pm") {

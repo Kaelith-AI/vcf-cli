@@ -45,6 +45,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- **Stress + QA testing package (#23, #24).** Two new MCP tools shipped as
+  a "testing package" — both configurable two ways, matching the
+  scaffolding-prompt pattern established by review_prepare /
+  project_init_existing reconstruct:
+  - **`test_stress` (#23):** fuzz at volume. Five input shapes
+    (valid-fuzz, invalid-fuzz, boundary, unicode, path-traversal). Default
+    `mode=llm-driven` returns a scaffolding prompt; `mode=endpoint`
+    forwards generation to a configured OpenAI-compatible endpoint.
+    Runner-persona rule is documented in-prompt: the generator must NOT
+    be the same model that wrote the subject code.
+  - **`test_qa` (#24):** coverage-not-volume. Reads the audit log,
+    assembles a tool-coverage matrix keyed by `(tool, last_invoked_at,
+    last_result_code, invocations_30d)` and flags tools not exercised
+    within `stale_days` (default 30). Returns matrix + scaffolding
+    prompt. Same endpoint fallthrough shape as `test_stress`.
+  Both rely on the existing `config.defaults.stress_test` (and future
+  `defaults.qa_test`) for endpoint/model resolution. Integration
+  coverage in test/integration/test_surface_tools.test.ts.
 - **Test-surface tools (#12, #13, #14).** Three new MCP tools shipped
   together under the test-lifecycle surface:
   - **`test_add_missing_case` (#12):** LLM-driven. Given the current plan +

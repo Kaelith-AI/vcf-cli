@@ -138,6 +138,40 @@ describe("test-surface tools (#12, #13, #14)", () => {
     expect(missing?.severity).toBe("blocker");
   });
 
+  it("test_stress returns a scaffolding prompt in llm-driven mode", async () => {
+    const res = await client.callTool({
+      name: "test_stress",
+      arguments: { subject: "idea_capture", shape: "invalid-fuzz", count: 50, expand: true },
+    });
+    const env = parseResult(res);
+    expect(env.ok).toBe(true);
+    const content = env.content as {
+      mode: string;
+      subject: string;
+      scaffolding_prompt: string;
+    };
+    expect(content.mode).toBe("llm-driven");
+    expect(content.subject).toBe("idea_capture");
+    expect(content.scaffolding_prompt).toContain("idea_capture");
+    expect(content.scaffolding_prompt).toContain("50 adversarial inputs");
+  });
+
+  it("test_qa returns a coverage matrix + scaffolding prompt", async () => {
+    const res = await client.callTool({
+      name: "test_qa",
+      arguments: { stale_days: 7, expand: true },
+    });
+    const env = parseResult(res);
+    expect(env.ok).toBe(true);
+    const content = env.content as {
+      coverage: Array<{ tool: string; stale: boolean }>;
+      scaffolding_prompt: string;
+    };
+    expect(Array.isArray(content.coverage)).toBe(true);
+    expect(typeof content.scaffolding_prompt).toBe("string");
+    expect(content.scaffolding_prompt).toContain("QA sweep");
+  });
+
   it("vibe_check flags `as any` + silent-catch + ts-ignore in source", async () => {
     const srcDir = join(projectDir, "src");
     await mkdir(srcDir, { recursive: true });
