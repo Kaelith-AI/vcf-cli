@@ -162,6 +162,7 @@ describe("M5 plan / build / logs (project scope)", () => {
         resolved: { scope: "global" },
         config,
         globalDb,
+        homeDir: home,
       });
       const [a, b] = InMemoryTransport.createLinkedPair();
       await server.connect(a);
@@ -175,16 +176,25 @@ describe("M5 plan / build / logs (project scope)", () => {
       globalDb.close();
     }
 
-    // Project scope.
+    // Project scope. State lives out-of-tree under <home>/.vcf/projects/demo/.
     const config = makeConfig();
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
-    const projectDb = openProjectDb({ path: join(projectDir, ".vcf", "project.db") });
+    const dbPath = join(home, ".vcf", "projects", "demo", "project.db");
+    const projectDb = openProjectDb({ path: dbPath });
     const resolved: ResolvedScope = {
       scope: "project",
-      vcfDir: join(projectDir, ".vcf"),
-      projectDbPath: join(projectDir, ".vcf", "project.db"),
+      projectRoot: projectDir,
+      projectSlug: "demo",
+      projectDbPath: dbPath,
     };
-    const server = createServer({ scope: "project", resolved, config, globalDb, projectDb });
+    const server = createServer({
+      scope: "project",
+      resolved,
+      config,
+      globalDb,
+      projectDb,
+      homeDir: home,
+    });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
     const client = new Client({ name: "t", version: "0" }, { capabilities: {} });

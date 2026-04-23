@@ -39,6 +39,7 @@ import { loadKbCached } from "../primers/load.js";
 import { matchPrimers } from "../primers/match.js";
 import { setProjectState } from "../util/projectRegistry.js";
 import { emptyCarryForward, renderYaml, type CarryForward } from "../review/carryForward.js";
+import { projectRunsDir } from "../project/stateDir.js";
 
 // Review type is validated against `config.review.categories` at runtime, not
 // with a fixed z.enum — users may extend the set via their config.yaml (e.g.
@@ -122,8 +123,17 @@ export function registerReviewPrepare(server: McpServer, deps: ServerDeps): void
 
           const ts = isoCompactNow();
           const runId = `${parsed.type}-${parsed.stage}-${ts}`;
-          const runDir = join(root, ".review-runs", runId);
-          await assertInsideAllowedRoot(runDir, deps.config.workspace.allowed_roots);
+          const slug = deps.resolved.projectSlug;
+          if (!slug) {
+            throw new McpError(
+              "E_STATE_INVALID",
+              "review_prepare requires a resolved project slug (run the server in project scope)",
+            );
+          }
+          const runDir = join(projectRunsDir(slug, deps.homeDir), runId);
+          // runDir lives under ~/.vcf/projects/<slug>/review-runs/ — out of
+          // the project tree. No allowed_roots check: user state dir is
+          // trusted by construction.
           await mkdir(runDir, { recursive: true });
 
           // Copy stage file (read-only — by convention, not filesystem-enforced).

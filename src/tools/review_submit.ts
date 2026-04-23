@@ -19,6 +19,8 @@ import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
 import { CARRY_FORWARD_SECTIONS, type CarryForwardSection } from "../review/carryForward.js";
 import { persistReviewSubmission, VERDICTS, type ReviewRunRow } from "../review/submitCore.js";
+import { projectRunsDir } from "../project/stateDir.js";
+import { join } from "node:path";
 
 const FindingSchema = z
   .object({
@@ -79,10 +81,19 @@ export function registerReviewSubmit(server: McpServer, deps: ServerDeps): void 
             throw new McpError("E_NOT_FOUND", `review run "${parsed.run_id}" does not exist`);
           }
 
+          const slug = deps.resolved.projectSlug;
+          if (!slug) {
+            throw new McpError(
+              "E_STATE_INVALID",
+              "review_submit requires a resolved project slug (project scope)",
+            );
+          }
+          const runDir = join(projectRunsDir(slug, deps.homeDir), run.id);
           const { reportPath, merged } = await persistReviewSubmission({
             projectDb: deps.projectDb,
             allowedRoots: deps.config.workspace.allowed_roots,
             projectRoot: root,
+            runDir,
             run,
             submission: {
               verdict: parsed.verdict,

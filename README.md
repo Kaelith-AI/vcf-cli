@@ -43,7 +43,9 @@ vcf init
 This:
 
 - seeds `~/.vcf/config.yaml` (asks y/N for opt-in error reporting, default **off**)
-- writes/merges `~/.mcp.json` to launch `vcf-mcp --scope global` from every MCP client session
+- writes/merges `~/.mcp.json` so every MCP client session launches `vcf-mcp`
+  (scope is auto-detected from the global registry at boot — no `--scope`
+  flag needed)
 - creates `~/.vcf/vcf.db` on first tool call
 
 ```bash
@@ -74,7 +76,7 @@ Claude's `spec-idea` skill runs `spec_template(project_name, idea_ref)`, fills t
 
 > _"/initialize-project \"Primer Scraper\" ~/projects/primer-scraper \<spec-path\>"_
 
-`project_init` scaffolds the dir: AGENTS.md / CLAUDE.md / TOOLS.md / MEMORY.md / README.md / CHANGELOG.md (from templates) + plans/ memory/ docs/ skills/ backups/ subdirs + `.vcf/project.db` + `.mcp.json` (auto-wiring `--scope project` for the next session) + `git init` with `post-commit` (daily-log append) and `pre-push` (gitleaks + uncommitted artifact warning) hooks.
+`project_init` scaffolds the dir: AGENTS.md / CLAUDE.md / TOOLS.md / MEMORY.md / README.md / CHANGELOG.md (from templates) + plans/ memory/ docs/ skills/ backups/ subdirs + `.mcp.json` (auto-wiring `vcf-mcp` for the next session — scope is auto-detected when the client launches in the project dir) + `git init` with `post-commit` (daily-log append) and `pre-push` (gitleaks + uncommitted artifact warning) hooks. The project's runtime state (SQLite DB + review-run scratch) lives out of tree at `~/.vcf/projects/<slug>/` — the project directory itself stays clean of VCF-generated files.
 
 #### Adopting an existing project (`vcf adopt`)
 
@@ -90,10 +92,13 @@ vcf adopt /path/to/existing-project --name "Legacy App" --state draft
 What this does (bypass mode — the only mode shipped today; `strict` /
 `reconstruct` are reserved):
 
-- Creates `<project>/.vcf/project.db` with `adopted = 1`, defaulting
-  `project.state` to `reviewing` (override with `--state`).
+- Creates `~/.vcf/projects/<slug>/project.db` with `adopted = 1`,
+  defaulting `project.state` to `reviewing` (override with `--state`).
+  Nothing is written to the project directory itself.
 - Writes a registry entry to `~/.vcf/vcf.db` so `vcf project list` and
-  portfolio tools see the project.
+  portfolio tools see the project, and so scope auto-detect resolves
+  project scope when any MCP client launches inside (or below) the
+  registered path.
 - Does **not** scaffold AGENTS.md / CLAUDE.md / plans / git hooks.
   Review, audit, and portfolio tools run fine without them; if you
   want the full scaffold run `vcf init` instead.
@@ -119,7 +124,7 @@ Key behaviors to know:
 
 ### 4. Plan inside the project
 
-Open a new MCP client session in the project directory. The project's `.mcp.json` loads `vcf-mcp --scope project` automatically.
+Open a new MCP client session in the project directory. The `.mcp.json` loads `vcf-mcp` automatically, and scope is auto-detected from the registry — launching inside (or below) the registered project root gives project scope, everywhere else gives global scope.
 
 > _"/plan scraper"_
 
@@ -183,7 +188,7 @@ The CLI flags mirror the tool: `--mode structured|narrative`, `--format md|json|
 
 `lesson_log_add` appends a structured lesson to the project lesson log. Required: `title`, `observation`. Optional: `context`, `actionable_takeaway`, `scope` (`project` \| `universal`; default from `config.lessons.default_scope`), `stage`, `tags`. Lesson text runs through the same redactor that gates outbound LLM traffic, so a pasted `sk-…` key or `.env`-shaped value lands in the DB as `[REDACTED:openai-key]` / `[REDACTED]` before any mirror write. Every call also writes exactly one audit row.
 
-Each lesson is persisted twice: once in `<project>/.vcf/project.db`, once mirrored into the cross-project global lessons DB at `config.lessons.global_db_path` (default `~/.vcf/lessons.db`). The project copy is authoritative; the mirror enables `lesson_search({ scope: "global" | "all" })` across every project that's opted in.
+Each lesson is persisted twice: once in the project's state DB at `~/.vcf/projects/<slug>/project.db`, once mirrored into the cross-project global lessons DB at `config.lessons.global_db_path` (default `~/.vcf/lessons.db`). The project copy is authoritative; the mirror enables `lesson_search({ scope: "global" | "all" })` across every project that's opted in.
 
 `lesson_search` accepts `query` (substring), `tags` (AND-filter), `stage`, `scope`, and `limit` (default 20, max 200). Ranking: `tag-hit-count × 2 + title-exact 10 / title-prefix 5 / title-contains 3 / body-contains 1`. `expand=true` attaches the observation + context bodies; the default envelope returns metadata only to keep the token cost low.
 

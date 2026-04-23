@@ -3,11 +3,15 @@
 // Scaffolds a new project directory:
 //   - AGENTS.md / CLAUDE.md / TOOLS.md / MEMORY.md / README.md / CHANGELOG.md from templates
 //   - plans/, memory/daily-logs/, docs/, skills/, backups/ subdirs
-//   - .vcf/project.db (initialized via openProjectDb)
-//   - .mcp.json (auto-wiring the project-scope MCP server)
+//   - .mcp.json (auto-wiring the MCP server; scope auto-detects via registry)
 //   - .gitignore
 //   - `git init` + hook templates (post-commit, pre-push)
 //   - optional: copy the source spec into plans/<slug>-spec.md
+//
+// The project's runtime state (project.db + review-run scratch) lives
+// OUT of the project tree under `~/.vcf/projects/<slug>/`. The project
+// directory stays clean of any VCF-generated binaries — only artifacts
+// the team would commit (plans, specs, review reports) go in-tree.
 //
 // Merge-safe: on an existing project directory, refuse unless --force is
 // set; when merging, any file that already exists is skipped with a warning
@@ -31,6 +35,7 @@ import { readTemplate, renderTemplate, templatesDir } from "../util/templates.js
 import { openProjectDb } from "../db/project.js";
 import { writeAudit } from "../util/audit.js";
 import { upsertProject } from "../util/projectRegistry.js";
+import { projectDbPath, projectStateDir } from "../project/stateDir.js";
 import { VERSION } from "../version.js";
 import { McpError } from "../errors.js";
 
@@ -71,7 +76,6 @@ const SUBDIRS = [
   "docs",
   "skills",
   "backups",
-  ".vcf",
 ] as const;
 
 export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
@@ -180,11 +184,12 @@ export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
             }
           }
 
-          // .mcp.json — merge with existing, never replace.
+          // .mcp.json — merge with existing, never replace. No --scope flag:
+          // the server auto-detects project scope from the sibling .vcf/.
           const mcpJsonPath = join(target, ".mcp.json");
           const mcpBlock = {
             command: "npx",
-            args: ["-y", "@kaelith-labs/cli", "vcf-mcp", "--scope", "project"],
+            args: ["-y", "@kaelith-labs/cli", "vcf-mcp"],
             env: { VCF_CONFIG: "${HOME}/.vcf/config.yaml" },
           };
           let mcpMerged = false;
@@ -214,8 +219,10 @@ export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
             written.push(mcpJsonPath);
           }
 
-          // Project DB.
-          const dbPath = join(target, ".vcf", "project.db");
+          // Project DB — lives out of tree under ~/.vcf/projects/<slug>/.
+          // The project directory itself stays clean of VCF-generated files.
+          await mkdir(projectStateDir(projectSlug, deps.homeDir), { recursive: true });
+          const dbPath = projectDbPath(projectSlug, deps.homeDir);
           const newDb = !existsSync(dbPath);
           const db = openProjectDb({ path: dbPath });
           const now = Date.now();

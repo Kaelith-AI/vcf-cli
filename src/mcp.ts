@@ -1,13 +1,16 @@
 // `vcf-mcp` binary entry.
 //
 // Responsibilities:
-//  - parse CLI args (--scope, optional --cwd)
+//  - parse CLI args (optional --scope override, optional --cwd)
+//  - resolve scope from filesystem (walk-up for .vcf/project.db) unless
+//    --scope explicitly overrides
 //  - resolve config (VCF_CONFIG or ~/.vcf/config.yaml)
-//  - open DBs (global always; project only when --scope=project)
+//  - open DBs (global always; project only when scope is project)
 //  - hand off to createServer() and wire the stdio transport
 //  - on SIGINT/SIGTERM, close transports and exit cleanly
 
 import { Command } from "commander";
+import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -26,21 +29,23 @@ async function main(): Promise<void> {
     .name("vcf-mcp")
     .description("Vibe Coding Framework MCP server (stdio transport).")
     .version(VERSION)
-    .requiredOption(
+    .option(
       "--scope <scope>",
-      "launch scope: global (idea/spec/catalog) or project (full lifecycle)",
+      "explicit override: 'global' (idea/spec/catalog) or 'project' (full lifecycle). " +
+        "When omitted, scope is auto-detected by walking up from cwd for .vcf/project.db.",
     )
     .option("--cwd <path>", "override working directory used for project-scope detection")
     .parse(process.argv);
 
-  const opts = program.opts<{ scope: string; cwd?: string }>();
-  if (opts.scope !== "global" && opts.scope !== "project") {
-    process.stderr.write(`vcf-mcp: --scope must be "global" or "project" (got "${opts.scope}")\n`);
+  const opts = program.opts<{ scope?: string; cwd?: string }>();
+  if (opts.scope !== undefined && opts.scope !== "global" && opts.scope !== "project") {
+    process.stderr.write(
+      `vcf-mcp: --scope must be "global" or "project" when supplied (got "${opts.scope}")\n`,
+    );
     process.exit(2);
   }
 
   const cwd = opts.cwd ? resolvePath(opts.cwd) : process.cwd();
-  const resolved = resolveScope({ requested: opts.scope, cwd });
 
   // Config resolution: VCF_CONFIG env > ~/.vcf/config.yaml.
   const configPath = process.env["VCF_CONFIG"] ?? resolvePath(homedir(), ".vcf", "config.yaml");
@@ -51,6 +56,17 @@ async function main(): Promise<void> {
     }
     throw err;
   });
+
+  // Global DB must be open before scope resolution — auto-detect queries
+  // the registry to find the project that owns cwd.
+  const globalDbPath = resolvePath(homedir(), ".vcf", "vcf.db");
+  const globalDb = openGlobalDb({ path: globalDbPath });
+
+  const resolved = resolveScope(
+    opts.scope !== undefined
+      ? { requested: opts.scope as "global" | "project", cwd, globalDb }
+      : { cwd, globalDb },
+  );
 
   // Install telemetry reporter per config (default off).
   const reporter = resolveReporter({
@@ -68,9 +84,19 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 
-  // DB openers.
-  const globalDbPath = resolvePath(homedir(), ".vcf", "vcf.db");
-  const globalDb = openGlobalDb({ path: globalDbPath });
+  // Guard against silent empty-DB recreation: if scope resolution placed us in
+  // project scope (registry match) but the state-dir was deleted externally
+  // between registration and now, openProjectDb would happily create a fresh
+  // empty DB with no project row. That surfaces as confusing E_STATE_INVALID
+  // errors on the first tool call. Fail fast with a clear message instead.
+  if (resolved.projectDbPath && !existsSync(resolved.projectDbPath)) {
+    process.stderr.write(
+      `vcf-mcp: project '${resolved.projectSlug}' is registered (root=${resolved.projectRoot}) ` +
+        `but its state DB is missing at ${resolved.projectDbPath}. ` +
+        `Re-run 'vcf adopt ${resolved.projectRoot}' to heal.\n`,
+    );
+    process.exit(4);
+  }
   const projectDb = resolved.projectDbPath
     ? openProjectDb({ path: resolved.projectDbPath })
     : undefined;

@@ -66,6 +66,12 @@ export interface ServerDeps {
   config: Config;
   globalDb: DatabaseType;
   projectDb?: DatabaseType | undefined;
+  /**
+   * VCF home dir — the parent of `.vcf/projects/<slug>/`. Tests pass a
+   * tmpdir so state doesn't leak into the real `~/.vcf/`. Production omits
+   * this and the state-dir helpers fall back to `VCF_HOME` env / `homedir()`.
+   */
+  homeDir?: string | undefined;
 }
 
 export interface ServerDescribe {
@@ -135,7 +141,7 @@ export function createServer(deps: ServerDeps): McpServer {
         writeAudit(deps.globalDb, {
           tool: "vcf_ping",
           scope: deps.scope === "project" ? "project" : "global",
-          project_root: deps.resolved.vcfDir ? deps.resolved.vcfDir.replace(/\.vcf$/, "") : null,
+          project_root: deps.resolved.projectRoot ?? null,
           inputs: args,
           outputs: payload,
           result_code: "ok",

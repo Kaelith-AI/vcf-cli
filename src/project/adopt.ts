@@ -1,9 +1,10 @@
 // Shared project-adoption core.
 //
 // The CLI (`vcf adopt`) and the MCP tool (`project_init_existing`) both need
-// to bring a pre-existing directory under VCF tracking: open/create the
-// per-project SQLite, mark `adopted=1`, insert or update the project row,
-// and upsert into the global registry. Before this module they each
+// to bring a pre-existing directory under VCF tracking: create the per-
+// project state dir under `~/.vcf/projects/<slug>/`, open/create the
+// SQLite there, mark `adopted=1`, insert or update the project row, and
+// upsert into the global registry. Before this module they each
 // reimplemented that sequence independently — a drift vector on a boundary-
 // sensitive flow, flagged at the 0.5.0 release gate (followup #39).
 //
@@ -16,17 +17,21 @@
 //   - state/mode argument validation
 //   - user-facing messaging
 //
-// The core owns: mkdir .vcf, project.db open/create, project row
-// insert/update with adopted=1, global registry upsert with the registry-
-// healing non-fatal contract.
+// The core owns: mkdir under ~/.vcf/projects/<slug>/, project.db
+// open/create, project row insert/update with adopted=1, global registry
+// upsert with the registry-healing non-fatal contract.
+//
+// VCF never writes runtime state into the project directory (no in-tree
+// `.vcf/`). The project dir stays clean — only user-authored artifacts
+// (plans/, CLAUDE.md, specs, final review reports) belong there.
 
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openProjectDb, type ProjectState } from "../db/project.js";
 import { upsertProject } from "../util/projectRegistry.js";
 import { slugify } from "../util/slug.js";
+import { projectDbPath, projectStateDir } from "./stateDir.js";
 
 export interface AdoptProjectInput {
   /** Absolute path to the project directory. Caller must validate beforehand. */
@@ -37,6 +42,8 @@ export interface AdoptProjectInput {
   state: ProjectState;
   /** Global registry DB handle. The core upserts; mirror failure is non-fatal. */
   globalDb: DatabaseSync;
+  /** Override for the VCF home dir. Tests pass a tmpdir; prod uses `VCF_HOME` env or `~`. */
+  homeDir?: string;
 }
 
 export interface AdoptProjectResult {
@@ -68,13 +75,13 @@ export interface AdoptProjectResult {
  * Registry write is advisory (see AdoptProjectResult.registryWarning).
  */
 export async function adoptProject(input: AdoptProjectInput): Promise<AdoptProjectResult> {
-  const { root, name, state, globalDb } = input;
+  const { root, name, state, globalDb, homeDir } = input;
   const slug = slugify(name);
 
-  await mkdir(join(root, ".vcf"), { recursive: true });
-  const projectDbPath = join(root, ".vcf", "project.db");
-  const freshDb = !existsSync(projectDbPath);
-  const pdb = openProjectDb({ path: projectDbPath });
+  await mkdir(projectStateDir(slug, homeDir), { recursive: true });
+  const dbPath = projectDbPath(slug, homeDir);
+  const freshDb = !existsSync(dbPath);
+  const pdb = openProjectDb({ path: dbPath });
   const now = Date.now();
   const existing = pdb.prepare("SELECT id, name, state FROM project WHERE id = 1").get() as
     | { id: number; name: string; state: string }
@@ -108,7 +115,7 @@ export async function adoptProject(input: AdoptProjectInput): Promise<AdoptProje
   }
 
   return {
-    projectDbPath,
+    projectDbPath: dbPath,
     slug,
     freshDb,
     existing: existing ? { name: existing.name, state: existing.state } : null,

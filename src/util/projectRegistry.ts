@@ -15,6 +15,7 @@
 //     global-DB row.
 
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
+import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import { queryAll, queryRow } from "./db.js";
 
@@ -115,6 +116,27 @@ export function getProjectByRoot(db: DatabaseType, root_path: string): ProjectRo
     [root_path],
   );
   return row ? rowOf(row) : null;
+}
+
+/**
+ * Walk up from `cwd`, returning the first registered project whose
+ * `root_path` matches a parent directory (or cwd itself). Used by the CLI
+ * to find "which project am I in" without needing an in-tree marker.
+ */
+export function findProjectForCwd(db: DatabaseType, cwd: string): ProjectRow | null {
+  const rows = listProjects(db);
+  if (rows.length === 0) return null;
+  const byPath = new Map<string, ProjectRow>();
+  for (const r of rows) byPath.set(resolve(r.root_path), r);
+
+  let dir = resolve(cwd);
+  while (true) {
+    const hit = byPath.get(dir);
+    if (hit) return hit;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /**

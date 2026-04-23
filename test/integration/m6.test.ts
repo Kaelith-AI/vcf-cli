@@ -73,7 +73,8 @@ describe("M6 test pipeline (project scope)", () => {
       .run(projectDir, now, now);
     const resolved: ResolvedScope = {
       scope: "project",
-      vcfDir: join(projectDir, ".vcf"),
+      projectRoot: projectDir,
+      projectSlug: "test-project",
       projectDbPath: join(projectDir, ".vcf", "project.db"),
     };
     const server = createServer({ scope: "project", resolved, config, globalDb, projectDb });

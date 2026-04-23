@@ -2,7 +2,7 @@
 //
 // Adopts a pre-existing project directory into VCF without demanding the
 // retroactive full lifecycle paper trail. The current shipping mode is
-// `bypass`: creates a minimal `.vcf/project.db` + registry row, flags the
+// `bypass`: creates a minimal project.db under ~/.vcf/projects/<slug>/ + registry row, flags the
 // project as `adopted=1`, and does NOT scaffold AGENTS.md / CLAUDE.md /
 // plans / decisions / git-hooks. The motivating use case is running the
 // review surface against projects that weren't born in VCF (VCF dogfooding
@@ -79,7 +79,7 @@ export function registerProjectInitExisting(server: McpServer, deps: ServerDeps)
     {
       title: "Adopt Existing Project",
       description:
-        "Bring an existing project directory under VCF tracking without re-scaffolding. Current mode: 'bypass' — creates .vcf/project.db + registry row, flags adopted=1. Future modes ('strict', 'reconstruct') will enforce or infer missing lifecycle artifacts. Use when you want to run review/portfolio tools against a project that wasn't born in VCF.",
+        "Bring an existing project directory under VCF tracking without re-scaffolding. Current mode: 'bypass' — registers the path and creates project.db under ~/.vcf/projects/<slug>/; nothing is written to the project dir itself. Future modes ('strict', 'reconstruct') will enforce or infer missing lifecycle artifacts. Use when you want to run review/portfolio tools against a project that wasn't born in VCF.",
       inputSchema: ProjectInitExistingInput,
     },
     async (args: ProjectInitExistingArgs) => {
@@ -110,6 +110,7 @@ export function registerProjectInitExisting(server: McpServer, deps: ServerDeps)
             name,
             state: parsed.state as ProjectState,
             globalDb: deps.globalDb,
+            ...(deps.homeDir !== undefined ? { homeDir: deps.homeDir } : {}),
           });
 
           const summary = result.existing

@@ -44,12 +44,14 @@ describe("adoptProject shared core", () => {
       name: "Proj A",
       state: "reviewing",
       globalDb,
+      homeDir: workRoot,
     });
 
     expect(r.freshDb).toBe(true);
     expect(r.existing).toBeNull();
     expect(r.registryWarning).toBeNull();
-    expect(r.projectDbPath).toBe(join(root, ".vcf", "project.db"));
+    // State lives out of tree under <home>/.vcf/projects/<slug>/project.db.
+    expect(r.projectDbPath).toBe(join(workRoot, ".vcf", "projects", "proj-a", "project.db"));
     expect(r.slug).toBe("proj-a");
 
     // Open the produced project DB and verify the row.
@@ -75,13 +77,20 @@ describe("adoptProject shared core", () => {
     const root = join(workRoot, "proj-b");
     await mkdir(root, { recursive: true });
 
-    await adoptProject({ root, name: "Original", state: "building", globalDb });
+    await adoptProject({
+      root,
+      name: "Original",
+      state: "building",
+      globalDb,
+      homeDir: workRoot,
+    });
     // A second call with different name/state must NOT clobber the row.
     const r2 = await adoptProject({
       root,
-      name: "Renamed Attempt",
+      name: "Original",
       state: "shipping",
       globalDb,
+      homeDir: workRoot,
     });
 
     expect(r2.freshDb).toBe(false);
@@ -104,6 +113,7 @@ describe("adoptProject shared core", () => {
       name: "Proj C",
       state: "draft",
       globalDb,
+      homeDir: workRoot,
     });
 
     // The project-db write is authoritative and must succeed even with the

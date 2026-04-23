@@ -157,6 +157,7 @@ describe("e2e: full lifecycle", () => {
       resolved: { scope: "global" },
       config: makeConfig(),
       globalDb,
+      homeDir: home,
     });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
@@ -167,11 +168,13 @@ describe("e2e: full lifecycle", () => {
 
   async function connectProject() {
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
-    const projectDb = openProjectDb({ path: join(projectDir, ".vcf", "project.db") });
+    const dbPath = join(home, ".vcf", "projects", "primer-scraper", "project.db");
+    const projectDb = openProjectDb({ path: dbPath });
     const resolved: ResolvedScope = {
       scope: "project",
-      vcfDir: join(projectDir, ".vcf"),
-      projectDbPath: join(projectDir, ".vcf", "project.db"),
+      projectRoot: projectDir,
+      projectSlug: "primer-scraper",
+      projectDbPath: dbPath,
     };
     const server = createServer({
       scope: "project",
@@ -179,6 +182,7 @@ describe("e2e: full lifecycle", () => {
       config: makeConfig(),
       globalDb,
       projectDb,
+      homeDir: home,
     });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
@@ -248,7 +252,9 @@ describe("e2e: full lifecycle", () => {
       ),
     );
     expect(existsSync(join(projectDir, "AGENTS.md"))).toBe(true);
-    expect(existsSync(join(projectDir, ".vcf", "project.db"))).toBe(true);
+    // State lives out of tree under ~/.vcf/projects/<slug>/.
+    expect(existsSync(join(home, ".vcf", "projects", "primer-scraper", "project.db"))).toBe(true);
+    expect(existsSync(join(projectDir, ".vcf"))).toBe(false);
     expect(existsSync(join(projectDir, ".mcp.json"))).toBe(true);
 
     // ---- 4. plan (project scope) ----

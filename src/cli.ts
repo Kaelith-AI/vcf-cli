@@ -30,6 +30,14 @@ import { canonicalizeRoots } from "./util/paths.js";
 import { openGlobalDb } from "./db/global.js";
 import { openProjectDb } from "./db/project.js";
 import { loadKb } from "./primers/load.js";
+import { projectDbPath } from "./project/stateDir.js";
+import { findProjectForCwd } from "./util/projectRegistry.js";
+
+/**
+ * Resolve the global VCF dir. Honors `VCF_HOME` (test hook; scoped to a
+ * tmpdir during tests) so CLI operations don't touch the real `~/.vcf/`.
+ */
+const vcfHomeDir = (): string => process.env["VCF_HOME"] ?? homedir();
 
 const DEFAULT_CONFIG_PATH = (): string => resolvePath(homedir(), ".vcf", "config.yaml");
 const DEFAULT_KB_ROOT = (): string => resolvePath(homedir(), ".vcf", "kb");
@@ -213,10 +221,15 @@ async function runInit(opts: { telemetry?: boolean } = {}): Promise<void> {
   // that onboarding hole. Idempotent — skipped if the dir exists.
   await seedKbIfMissing(DEFAULT_KB_ROOT(), DEFAULT_KB_ANCESTOR_ROOT());
 
-  // User-level .mcp.json auto-wire for --scope global.
+  // User-level .mcp.json auto-wire. No --scope flag: the server auto-detects
+  // project vs global by walking up from cwd and matching against the
+  // global registry (~/.vcf/vcf.db). When a client launches from a
+  // non-project dir, this falls through to global; when launched from a
+  // registered project root, the full lifecycle tool surface comes up
+  // automatically.
   const globalBlock = {
     command: "npx",
-    args: ["-y", "@kaelith-labs/cli", "vcf-mcp", "--scope", "global"],
+    args: ["-y", "@kaelith-labs/cli", "vcf-mcp"],
     env: { VCF_CONFIG: `${homedir()}/.vcf/config.yaml` },
   };
   if (existsSync(userMcpJsonPath)) {
@@ -251,9 +264,18 @@ async function runInit(opts: { telemetry?: boolean } = {}): Promise<void> {
 
 async function runReindex(opts: { project?: string }): Promise<void> {
   const target = resolvePath(opts.project ?? process.cwd());
-  const dbPath = join(target, ".vcf", "project.db");
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
+  const project = findProjectForCwd(globalDb, target);
+  globalDb.close();
+  if (!project) {
+    err(
+      `no registered VCF project at or above ${target} — run 'vcf init' or 'vcf adopt' first`,
+      2,
+    );
+  }
+  const dbPath = projectDbPath(project!.name);
   if (!existsSync(dbPath)) {
-    err(`no project.db at ${dbPath} — run 'vcf init' in this directory first`, 2);
+    err(`project.db missing at ${dbPath} — re-run 'vcf adopt' to heal`, 2);
   }
   const db = openProjectDb({ path: dbPath });
 
@@ -437,13 +459,18 @@ async function runVerify(opts: { format?: string } = {}): Promise<void> {
     }
   }
 
-  // Project-local check (if cwd is initialized).
-  const cwdDb = join(process.cwd(), ".vcf", "project.db");
-  if (existsSync(cwdDb)) {
+  // Project-local check: is cwd inside a registered project?
+  const verifyGlobalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
+  const verifyProject = findProjectForCwd(verifyGlobalDb, process.cwd());
+  verifyGlobalDb.close();
+  if (verifyProject) {
+    const cwdDb = projectDbPath(verifyProject.name);
     findings.push({
       section: "project",
-      level: "ok",
-      detail: `project scope detected at ${cwdDb}`,
+      level: existsSync(cwdDb) ? "ok" : "warn",
+      detail: existsSync(cwdDb)
+        ? `project '${verifyProject.name}' detected — state at ${cwdDb}`
+        : `project '${verifyProject.name}' registered but state missing at ${cwdDb} — re-run 'vcf adopt'`,
     });
     // Check git hooks.
     for (const hook of ["post-commit", "pre-push"] as const) {
@@ -841,7 +868,7 @@ async function runAdopt(opts: { path: string; name?: string; state?: string }): 
   // the whole string on Windows (`C:\work\repo` → `C:\work\repo`).
   const name = opts.name ?? (basename(absRoot) || "project");
 
-  const globalDb = openGlobalDb({ path: resolvePath(homedir(), ".vcf", "vcf.db") });
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
   try {
     const result = await adoptProject({
       root: absRoot,
@@ -877,13 +904,22 @@ async function runLifecycleReport(opts: {
   include?: string;
 }): Promise<void> {
   const target = resolvePath(opts.project ?? process.cwd());
-  const dbPath = join(target, ".vcf", "project.db");
-  if (!existsSync(dbPath)) {
-    err(`no project.db at ${dbPath} — run 'vcf init' or 'vcf adopt' first`, 2);
-  }
   const config = await loadConfigOrExit();
-  const globalDbPath = join(homedir(), ".vcf", "vcf.db");
+  const globalDbPath = join(vcfHomeDir(), ".vcf", "vcf.db");
   const globalDb = openGlobalDb({ path: globalDbPath });
+  const project = findProjectForCwd(globalDb, target);
+  if (!project) {
+    globalDb.close();
+    err(
+      `no registered VCF project at or above ${target} — run 'vcf init' or 'vcf adopt' first`,
+      2,
+    );
+  }
+  const dbPath = projectDbPath(project!.name);
+  if (!existsSync(dbPath)) {
+    globalDb.close();
+    err(`project.db missing at ${dbPath} — re-run 'vcf adopt' to heal`, 2);
+  }
   const projectDb = openProjectDb({ path: dbPath });
 
   const mode = (opts.mode ?? "structured") as "structured" | "narrative";
@@ -952,25 +988,24 @@ async function runProjectRegister(opts: { path: string; name?: string }): Promis
   const { upsertProject } = await import("./util/projectRegistry.js");
   const { openProjectDb } = await import("./db/project.js");
   const absRoot = resolvePath(opts.path);
-  const projectDbPath = join(absRoot, ".vcf", "project.db");
-  if (!existsSync(projectDbPath)) {
-    err(`${absRoot} is not an initialized VCF project (no .vcf/project.db)`, 2);
+  // The name + state come from whatever is already known. If a state-dir
+  // exists for the derived slug, read name/state from there; otherwise
+  // fall back to the directory basename (user can set --name).
+  const candidateName =
+    opts.name ?? slugifyBasic(absRoot.split("/").pop() ?? "project");
+  const statePath = projectDbPath(candidateName);
+  let row: { name: string; state: string } | undefined;
+  if (existsSync(statePath)) {
+    const pdb = openProjectDb({ path: statePath });
+    row = pdb.prepare("SELECT name, state FROM project WHERE id = 1").get() as
+      | { name: string; state: string }
+      | undefined;
+    pdb.close();
   }
-  // Read name + state from the project.db so registration matches the
-  // project's own metadata. Falls back to the dir basename for name and
-  // 'draft' for state if the row is missing (shouldn't happen on a
-  // properly-initialized project).
-  const pdb = openProjectDb({ path: projectDbPath });
-  const row = pdb.prepare("SELECT name, state FROM project WHERE id = 1").get() as
-    | { name: string; state: string }
-    | undefined;
-  pdb.close();
-  const name =
-    opts.name ??
-    (row ? slugifyBasic(row.name) : slugifyBasic(absRoot.split("/").pop() ?? "project"));
+  const name = opts.name ?? (row ? slugifyBasic(row.name) : candidateName);
   const state = row?.state ?? null;
 
-  const globalDb = openGlobalDb({ path: resolvePath(homedir(), ".vcf", "vcf.db") });
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
   try {
     upsertProject(globalDb, { name, root_path: absRoot, state });
     log(`registered project '${name}' → ${absRoot}`);
@@ -982,7 +1017,7 @@ async function runProjectRegister(opts: { path: string; name?: string }): Promis
 async function runProjectList(): Promise<void> {
   const { openGlobalDb } = await import("./db/global.js");
   const { listProjects } = await import("./util/projectRegistry.js");
-  const globalDb = openGlobalDb({ path: resolvePath(homedir(), ".vcf", "vcf.db") });
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
   try {
     const rows = listProjects(globalDb);
     if (rows.length === 0) {
@@ -1006,62 +1041,23 @@ async function runProjectList(): Promise<void> {
 }
 
 async function runProjectScan(opts: { root: string }): Promise<void> {
-  const { openGlobalDb } = await import("./db/global.js");
-  const { upsertProject } = await import("./util/projectRegistry.js");
-  const { openProjectDb } = await import("./db/project.js");
-  const absRoot = resolvePath(opts.root);
-  if (!existsSync(absRoot)) {
-    err(`root ${absRoot} does not exist`, 2);
-  }
-  // Walk up to 4 dirs deep looking for .vcf/project.db. Cheap enough
-  // for typical workspace trees; users with deeper hierarchies can
-  // register manually.
-  const found: Array<{ root: string; name: string; state: string }> = [];
-  async function walk(dir: string, depth: number): Promise<void> {
-    if (depth > 4) return;
-    const dbCandidate = join(dir, ".vcf", "project.db");
-    if (existsSync(dbCandidate)) {
-      const pdb = openProjectDb({ path: dbCandidate });
-      const row = pdb.prepare("SELECT name, state FROM project WHERE id = 1").get() as
-        | { name: string; state: string }
-        | undefined;
-      pdb.close();
-      if (row) found.push({ root: dir, name: slugifyBasic(row.name), state: row.state });
-      return; // don't recurse into a project's own tree
-    }
-    let entries;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      if (e.name.startsWith(".") || e.name === "node_modules") continue;
-      await walk(join(dir, e.name), depth + 1);
-    }
-  }
-  await walk(absRoot, 0);
-  if (found.length === 0) {
-    log(`no VCF projects found under ${absRoot}`);
-    return;
-  }
-  const globalDb = openGlobalDb({ path: resolvePath(homedir(), ".vcf", "vcf.db") });
-  try {
-    for (const p of found) {
-      upsertProject(globalDb, { name: p.name, root_path: p.root, state: p.state });
-      process.stderr.write(`  registered '${p.name}' → ${p.root}\n`);
-    }
-    log(`scan: ${found.length} project(s) registered`);
-  } finally {
-    globalDb.close();
-  }
+  // Scan previously walked the filesystem looking for `.vcf/project.db`
+  // markers inside project directories. With runtime state now living out
+  // of tree under ~/.vcf/projects/<slug>/, there is no in-tree signal to
+  // scan for — adoption is the only path to becoming a registered
+  // project. Print a helpful error instead of silently doing nothing.
+  void opts;
+  err(
+    "`vcf project scan` is obsolete — runtime state no longer lives in-tree. " +
+      "Use `vcf adopt <path>` (or `vcf init`) for each project root you want registered.",
+    2,
+  );
 }
 
 async function runProjectUnregister(name: string): Promise<void> {
   const { openGlobalDb } = await import("./db/global.js");
   const { unregisterProject } = await import("./util/projectRegistry.js");
-  const globalDb = openGlobalDb({ path: resolvePath(homedir(), ".vcf", "vcf.db") });
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
   try {
     const dropped = unregisterProject(globalDb, name);
     if (dropped) log(`unregistered project '${name}' (files untouched)`);
@@ -1075,12 +1071,12 @@ async function runProjectRefresh(): Promise<void> {
   const { openGlobalDb } = await import("./db/global.js");
   const { listProjects, setProjectState } = await import("./util/projectRegistry.js");
   const { openProjectDb } = await import("./db/project.js");
-  const globalDb = openGlobalDb({ path: resolvePath(homedir(), ".vcf", "vcf.db") });
+  const globalDb = openGlobalDb({ path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db") });
   try {
     const rows = listProjects(globalDb);
     let refreshed = 0;
     for (const p of rows) {
-      const pdbPath = join(p.root_path, ".vcf", "project.db");
+      const pdbPath = projectDbPath(p.name);
       if (!existsSync(pdbPath)) {
         process.stderr.write(
           `  [MISSING] ${p.name}: ${pdbPath} not found — consider unregistering\n`,
@@ -1595,7 +1591,7 @@ async function runAdminAudit(opts: {
   // accept the tiny cost of creating an empty DB here (migrations are
   // idempotent).
   const globalDb = openGlobalDb({
-    path: resolvePath(homedir(), ".vcf", "vcf.db"),
+    path: resolvePath(vcfHomeDir(), ".vcf", "vcf.db"),
   });
   const clauses: string[] = [];
   const params: Array<string | number> = [];
@@ -1871,8 +1867,10 @@ project
 
 project
   .command("scan")
-  .description("Walk a directory tree for .vcf/project.db dirs and bulk-register them.")
-  .requiredOption("--root <absolute-path>", "root to scan (up to 4 dirs deep)")
+  .description(
+    "Obsolete: runtime state no longer lives in-tree. Use `vcf adopt <path>` to register a project.",
+  )
+  .requiredOption("--root <absolute-path>", "(ignored; scan is a no-op)")
   .action(async (opts: { root: string }) => {
     try {
       await runProjectScan(opts);
@@ -1907,7 +1905,7 @@ project
 program
   .command("adopt")
   .description(
-    "Adopt an existing project directory into VCF tracking (followup #20, bypass mode). Creates .vcf/project.db + registry row without scaffolding docs/plans. Use when you want to run review or portfolio tools against a project not born in VCF.",
+    "Adopt an existing project directory into VCF tracking. Registers the root_path in the global registry and creates project.db under ~/.vcf/projects/<slug>/. Nothing is written into the project directory itself. Use when you want to run review or portfolio tools against a project not born in VCF.",
   )
   .argument("<path>", "absolute path to the existing project directory")
   .option("--name <name>", "human-readable project name (defaults to the directory basename)")

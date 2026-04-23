@@ -111,7 +111,8 @@ describe("ship_release positive-path state transition (followup #25 close-out)",
     upsertProject(globalDb, { name: "demo", root_path: projectDir, state: "shipping" });
     const resolved: ResolvedScope = {
       scope: "project",
-      vcfDir: join(projectDir, ".vcf"),
+      projectRoot: projectDir,
+      projectSlug: "test-project",
       projectDbPath: join(projectDir, ".vcf", "project.db"),
     };
     const server = createServer({ scope: "project", resolved, config, globalDb, projectDb });

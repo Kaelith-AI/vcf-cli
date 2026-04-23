@@ -39,6 +39,7 @@ import {
 } from "../review/submitCore.js";
 import { CARRY_FORWARD_SECTIONS, type CarryForwardSection } from "../review/carryForward.js";
 import { readOverlayBundle, type OverlayBundle, type ReviewType } from "../review/overlays.js";
+import { projectRunsDir } from "../project/stateDir.js";
 
 const ReviewExecuteInput = z
   .object({
@@ -153,7 +154,14 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
           }
 
           // Compose the prompt from the run workspace (written by review_prepare).
-          const runDir = join(root, ".review-runs", run.id);
+          const slug = deps.resolved.projectSlug;
+          if (!slug) {
+            throw new McpError(
+              "E_STATE_INVALID",
+              "review_execute requires a resolved project slug (project scope)",
+            );
+          }
+          const runDir = join(projectRunsDir(slug, deps.homeDir), run.id);
           if (!existsSync(runDir)) {
             throw new McpError(
               "E_STATE_INVALID",
@@ -240,6 +248,7 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
             projectDb: deps.projectDb,
             allowedRoots: deps.config.workspace.allowed_roots,
             projectRoot: root,
+            runDir,
             run,
             submission,
           });

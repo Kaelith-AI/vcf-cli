@@ -59,7 +59,14 @@ export interface ReviewRunRow {
 export interface PersistArgs {
   projectDb: DatabaseType;
   allowedRoots: readonly string[];
+  /** In-tree path for the final committed review report (plans/reviews/<type>/). */
   projectRoot: string;
+  /**
+   * Out-of-tree run workspace (~/.vcf/projects/<slug>/review-runs/<run-id>/),
+   * where the carry-forward YAML is rewritten so the next prepare can pick up
+   * the merged state.
+   */
+  runDir: string;
   run: ReviewRunRow;
   submission: Submission;
 }
@@ -71,7 +78,7 @@ export interface PersistResult {
 }
 
 export async function persistReviewSubmission(args: PersistArgs): Promise<PersistResult> {
-  const { projectDb, allowedRoots, projectRoot, run, submission } = args;
+  const { projectDb, allowedRoots, projectRoot, runDir, run, submission } = args;
 
   if (run.status !== "pending" && run.status !== "running") {
     throw new McpError("E_STATE_INVALID", `review run "${run.id}" is ${run.status}; cannot submit`);
@@ -89,9 +96,8 @@ export async function persistReviewSubmission(args: PersistArgs): Promise<Persis
   const reportPath = join(reportsDir, `stage-${run.stage}-${ts}.md`);
   await writeFile(reportPath, renderReport(run, submission, merged), "utf8");
 
-  const runWorkspace = join(projectRoot, ".review-runs", run.id);
-  if (existsSync(runWorkspace)) {
-    await writeFile(join(runWorkspace, "carry-forward.yaml"), renderYaml(merged), "utf8");
+  if (existsSync(runDir)) {
+    await writeFile(join(runDir, "carry-forward.yaml"), renderYaml(merged), "utf8");
   }
 
   projectDb

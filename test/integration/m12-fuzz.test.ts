@@ -73,6 +73,7 @@ describe("M12 fuzz: every tool rejects malformed input safely", () => {
       resolved: { scope: "global" },
       config,
       globalDb,
+        homeDir: home,
     });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
@@ -96,10 +97,11 @@ describe("M12 fuzz: every tool rejects malformed input safely", () => {
       .run(projectDir, now, now);
     const resolved: ResolvedScope = {
       scope: "project",
-      vcfDir: join(projectDir, ".vcf"),
+      projectRoot: projectDir,
+      projectSlug: "test-project",
       projectDbPath: join(projectDir, ".vcf", "project.db"),
     };
-    const server = createServer({ scope: "project", resolved, config, globalDb, projectDb });
+    const server = createServer({ scope: "project", resolved, config, globalDb, projectDb, homeDir: home });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
     const client = new Client({ name: "t", version: "0" }, { capabilities: {} });

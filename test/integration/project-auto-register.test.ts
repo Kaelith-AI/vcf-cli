@@ -134,7 +134,8 @@ describe("auto-registration in project_init + state mirror in plan_save", () => 
     // Connect a project-scope server.
     const resolved: ResolvedScope = {
       scope: "project",
-      vcfDir: join(projectDir, ".vcf"),
+      projectRoot: projectDir,
+      projectSlug: "test-project",
       projectDbPath: join(projectDir, ".vcf", "project.db"),
     };
     const server = createServer({

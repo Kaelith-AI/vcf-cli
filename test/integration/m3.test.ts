@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile, realpath } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -63,7 +64,7 @@ describe("M3 end-to-end skeleton spike (global scope)", () => {
     const config = makeConfig();
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
     const resolved: ResolvedScope = { scope: "global" };
-    const server = createServer({ scope: "global", resolved, config, globalDb });
+    const server = createServer({ scope: "global", resolved, config, globalDb, homeDir: home });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
     const client = new Client({ name: "test", version: "0" }, { capabilities: {} });
@@ -140,19 +141,25 @@ describe("M3 end-to-end skeleton spike (global scope)", () => {
       const body = await readFile(join(target, rel), "utf8");
       expect(body.length).toBeGreaterThan(0);
     }
-    // project.db exists and has the singleton row
-    const pdb = openProjectDb({ path: join(target, ".vcf", "project.db") });
+    // project.db exists out-of-tree at <home>/.vcf/projects/<slug>/project.db.
+    const pdb = openProjectDb({
+      path: join(home, ".vcf", "projects", "demo-project", "project.db"),
+    });
     const row = pdb.prepare("SELECT name, state FROM project WHERE id=1").get() as
       | { name: string; state: string }
       | undefined;
     expect(row?.name).toBe("Demo Project");
     expect(row?.state).toBe("draft");
     pdb.close();
-    // .mcp.json has a vcf block
+    // The project dir itself should NOT contain a .vcf/ directory — state is
+    // out of tree.
+    expect(existsSync(join(target, ".vcf"))).toBe(false);
+    // .mcp.json has a vcf block. Scope is auto-detected via the global
+    // registry, so no --scope flag is baked into the args.
     const mcpRaw = await readFile(join(target, ".mcp.json"), "utf8");
     const mcp = JSON.parse(mcpRaw) as { mcpServers: { vcf: { args: string[] } } };
-    expect(mcp.mcpServers.vcf.args).toContain("--scope");
-    expect(mcp.mcpServers.vcf.args).toContain("project");
+    expect(mcp.mcpServers.vcf.args).not.toContain("--scope");
+    expect(mcp.mcpServers.vcf.args).toContain("vcf-mcp");
   });
 
   it("project_init with force=false on existing non-empty dir returns E_ALREADY_EXISTS", async () => {
@@ -218,6 +225,7 @@ describe("M3 project scope (portfolio_status)", () => {
         resolved: { scope: "global" },
         config,
         globalDb,
+        homeDir: home,
       });
       const [a, b] = InMemoryTransport.createLinkedPair();
       await server.connect(a);
@@ -250,17 +258,20 @@ describe("M3 project scope (portfolio_status)", () => {
       kb: { root: join(home, ".vcf", "kb") },
     });
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
-    const projectDb = openProjectDb({ path: join(target, ".vcf", "project.db") });
+    const dbPath = join(home, ".vcf", "projects", "demo-project", "project.db");
+    const projectDb = openProjectDb({ path: dbPath });
     const server = createServer({
       scope: "project",
       resolved: {
         scope: "project",
-        vcfDir: join(target, ".vcf"),
-        projectDbPath: join(target, ".vcf", "project.db"),
+        projectRoot: target,
+        projectSlug: "demo-project",
+        projectDbPath: dbPath,
       },
       config,
       globalDb,
       projectDb,
+      homeDir: home,
     });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);

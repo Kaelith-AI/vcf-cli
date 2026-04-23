@@ -67,12 +67,16 @@ describe("project_init_existing (bypass mode)", () => {
   async function connectGlobal(globalDb: ReturnType<typeof openGlobalDb>) {
     const config = baseConfig();
     const resolved: ResolvedScope = { scope: "global" };
-    const server = createServer({ scope: "global", resolved, config, globalDb });
+    const server = createServer({ scope: "global", resolved, config, globalDb, homeDir: home });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
     const client = new Client({ name: "t", version: "0" }, { capabilities: {} });
     await client.connect(b);
     return client;
+  }
+
+  function stateDbPath(slug: string): string {
+    return join(home, ".vcf", "projects", slug, "project.db");
   }
 
   it("adopts an existing directory: creates project.db, adopted=1, registered in global", async () => {
@@ -89,7 +93,7 @@ describe("project_init_existing (bypass mode)", () => {
     );
     expect(env.ok).toBe(true);
 
-    const dbPath = join(target, ".vcf", "project.db");
+    const dbPath = stateDbPath("legacy-app");
     expect(existsSync(dbPath)).toBe(true);
 
     const pdb = openProjectDb({ path: dbPath });
@@ -121,7 +125,7 @@ describe("project_init_existing (bypass mode)", () => {
     );
     expect(env.ok).toBe(true);
 
-    const pdb = openProjectDb({ path: join(target, ".vcf", "project.db") });
+    const pdb = openProjectDb({ path: stateDbPath("myproj") });
     const row = pdb.prepare("SELECT name FROM project WHERE id = 1").get() as { name: string };
     expect(row.name).toBe("myproj");
   });
@@ -142,7 +146,7 @@ describe("project_init_existing (bypass mode)", () => {
     expect(env.ok).toBe(true);
 
     // Caller's subsequent state change (e.g. via another tool — simulated direct DB write).
-    const pdb = openProjectDb({ path: join(target, ".vcf", "project.db") });
+    const pdb = openProjectDb({ path: stateDbPath("existing") });
     pdb.prepare("UPDATE project SET state = 'shipped' WHERE id = 1").run();
     pdb.close();
 
@@ -155,7 +159,7 @@ describe("project_init_existing (bypass mode)", () => {
     );
     expect(env.ok).toBe(true);
 
-    const pdb2 = openProjectDb({ path: join(target, ".vcf", "project.db") });
+    const pdb2 = openProjectDb({ path: stateDbPath("existing") });
     const row = pdb2.prepare("SELECT state, adopted FROM project WHERE id = 1").get() as {
       state: string;
       adopted: number;
@@ -207,7 +211,7 @@ describe("project_init_existing (bypass mode)", () => {
     );
     expect(env.ok).toBe(true);
 
-    const pdb = openProjectDb({ path: join(target, ".vcf", "project.db") });
+    const pdb = openProjectDb({ path: stateDbPath("draftish") });
     const row = pdb.prepare("SELECT state FROM project WHERE id = 1").get() as { state: string };
     expect(row.state).toBe("draft");
   });

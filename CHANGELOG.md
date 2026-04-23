@@ -6,12 +6,94 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## Unreleased
 
-Pre-testing prep for the 0.4 dogfood: lets VCF be run against an
-already-existing project (including vcf-cli itself) and removes per-call
-endpoint/model arguments by routing through `config.yaml`.
+_No unreleased changes yet._
+
+---
+
+## [0.5.0] — 2026-04-23
+
+**Breaking: runtime state moves out of tree.** Per-project SQLite + review-run
+scratch no longer live inside project directories; they live under
+`~/.vcf/projects/<slug>/`. The project directory stays clean of any
+VCF-generated binaries — only artifacts the team would commit (plans/, specs,
+review reports under plans/reviews/, CLAUDE.md) go in-tree. Scope is now
+auto-detected from the global registry (`~/.vcf/vcf.db`); the `--scope` flag
+becomes an optional override. The 0.5 line skips 0.4 to signal the layout
+break clearly.
+
+### Breaking changes
+
+- **State-dir moved out of tree.** Pre-0.5.0 layout stored `<project>/.vcf/project.db`
+  and `<project>/.review-runs/<run-id>/` inside each project directory. Post-0.5.0,
+  both live at `~/.vcf/projects/<slug>/project.db` and
+  `~/.vcf/projects/<slug>/review-runs/<run-id>/` respectively. No `.vcf/`
+  directory is created in the project anymore. Rationale: (a) git repos should
+  not carry MCP-server runtime state; (b) the project root is the directory
+  the LLM is launched from (the one with CLAUDE.md), not a subcomponent of it;
+  (c) runtime state surviving a fresh clone is a feature, not a regression.
+- **Scope is auto-detected.** `vcf-mcp` no longer requires `--scope <global|project>`.
+  It walks up from cwd, matches against registered root_paths in `~/.vcf/vcf.db`,
+  and chooses project scope if it finds a match, global otherwise. The
+  `--scope` flag is still accepted as an explicit override. `vcf init` and
+  `project_init` no longer emit a `--scope` arg in generated `.mcp.json`
+  files.
+- **`vcf project scan` is obsolete.** Without in-tree markers there is
+  nothing to scan for. The command now prints an error pointing at
+  `vcf adopt <path>` as the replacement. Future releases may remove the
+  subcommand entirely.
+
+### Migration from 0.3.2
+
+Upgrading on top of an existing 0.3.x install will NOT silently delete your
+state, but auto-detect won't find your project until the state is moved. The
+manual migration, per project, is:
+
+```bash
+# 1. Backup the old project.db
+cp <project>/.vcf/project.db ~/backups/project.db.pre-0.5.$(date +%s)
+
+# 2. Create the new state-dir and copy the DB in. <slug> is kebab-case of the
+#    project name (usually matches the name you registered with).
+mkdir -p ~/.vcf/projects/<slug>
+cp <project>/.vcf/project.db ~/.vcf/projects/<slug>/project.db
+
+# 3. If your project directory is different from what's registered (e.g., the
+#    project root is actually the parent of a sub-component), update both the
+#    registry and the project.db to the correct path. Otherwise skip this step.
+#    Use any SQLite client (sqlite3 CLI, DB Browser, node:sqlite).
+#      - In ~/.vcf/vcf.db:         UPDATE projects SET root_path = '<new-path>', name = '<new-slug>' WHERE name = '<old-slug>';
+#      - In the copied project.db: UPDATE project  SET root_path = '<new-path>', name = '<new-name>'  WHERE id = 1;
+
+# 4. If you have in-tree .review-runs, move those too:
+mv <project>/.review-runs ~/.vcf/projects/<slug>/review-runs  # optional; safe to drop if you don't care about the prior run scratch
+
+# 5. Remove the now-orphaned in-tree state dir.
+rm -rf <project>/.vcf
+```
+
+An automated `vcf migrate` command is tracked as a followup for 0.6.0.
 
 ### Added
 
+- **`src/project/stateDir.ts` helpers** — `projectStateDir(slug, home?)`,
+  `projectDbPath(slug, home?)`, `projectRunsDir(slug, home?)`. All three
+  honor `VCF_HOME` env var for test isolation (in addition to an explicit
+  home parameter). `~` prefix in config stays env-expanded as before.
+- **Registry-based scope auto-detect** — `resolveScope({ cwd, globalDb })`
+  opens the global registry, walks up from cwd, matches against registered
+  `root_path`, returns project scope rooted at the first hit. No in-tree
+  marker required. `--scope` flag explicit overrides are still honored.
+- **`ServerDeps.homeDir` for test isolation** — tests pass a tmpdir so
+  runtime state doesn't leak into the real `~/.vcf/`. Production omits it
+  and the state-dir helpers fall back to `VCF_HOME` / `homedir()`.
+- **`findProjectForCwd(globalDb, cwd)` util** — shared registry walk-up
+  helper used by `resolveScope` and the CLI commands (`vcf reindex`,
+  `vcf lifecycle-report`, `vcf verify`). Single source of truth for
+  "which project am I in."
+- **State-dir bootstrap guard in `vcf-mcp`** — if the registry resolves a
+  project but the state-dir DB is missing (e.g., deleted externally),
+  the binary now exits 4 with a targeted stderr pointing at `vcf adopt <root>`
+  to heal, instead of silently recreating an empty DB.
 - **`lifecycle_report` tool + `vcf lifecycle-report` CLI** (phase-2 inward
   loop, followup #27 — Phase C). Structured mode emits a versioned JSON
   (`src/schemas/lifecycle-report.schema.ts`, schema 1.0.0) plus a
@@ -59,24 +141,51 @@ endpoint/model arguments by routing through `config.yaml`.
   (`qwen3-coder` → `qwen`, `gpt-5.4` → `gpt`, `CLIProxyAPI/gpt-5.4` →
   `gpt`). `review_execute` now threads the resolved overlay into the
   system prompt and reports the applied match in its envelope.
+- **Reviewer overlay snapshots** (phase-2/E, followup #22 tail). `review_prepare`
+  now copies the base reviewer file + every `reviewer-<type>.*.md` variant
+  into the run dir; `review_execute` resolves overlays against the run-dir
+  snapshot, not the live KB. This closes a boundary leak where operator
+  edits to KB between prepare and execute would silently change what the
+  prepared run saw. Regression covered by `test/integration/review_overlay_snapshot.test.ts`.
+- **Same-type snapshot scoping for review_prepare** — decisions + response-log
+  snapshots are now filtered to the review type being prepared, and the
+  default scoped diff excludes `plans/reviews/**` + lifecycle-report
+  snapshots (prior reviews aren't code under review). Opt in with
+  `include_review_output=true`. Unblocks the 27-stage gate on context-constrained
+  local models.
+- **Tightened endpoint trust-level gate** (phase-2/E, security stage 2
+  followup). `review_execute` + `lifecycle_report` narrative now reject
+  defaults-routing to any non-local endpoint (not just public) unless the
+  caller passes `allow_public_endpoint=true` or the endpoint is specified
+  explicitly. Closes silent off-host routing via config drift on
+  `config.defaults.review.endpoint`.
+- **Shared adopt core** — `src/project/adopt.ts`. CLI (`vcf adopt`) and MCP
+  tool (`project_init_existing`) now share a single `adoptProject()` that
+  creates the state-dir, opens/creates the project.db, marks `adopted=1`,
+  and upserts the registry. Registry-write failures are non-fatal and
+  surfaced via `registryWarning` in the envelope. Closes followup #39.
 - **`config.kb.tag_vocabulary_strict` flag** (default `false`). Reserved
   for the next phase: when enabled, unknown tags in KB frontmatter will
   fail validation at load time. No enforcement yet — the flag only
   reserves the surface so the future switch is a one-line config edit.
 - **`lesson_log_add` + `lesson_search` tools** (phase-2 inward loop,
   followup #11 — Phase A). Project-scope lesson log persisted twice: once
-  in `<project>/.vcf/project.db` (migration v3, new `lessons` table), once
-  mirrored into a separate cross-project global DB at
-  `config.lessons.global_db_path` (default `~/.vcf/lessons.db`). Lesson
-  text runs through the existing redaction pass before either persist, so
-  an `sk-…` key lands as `[REDACTED:openai-key]`. `lesson_search` accepts
-  `query` / `tags` (AND-filter) / `stage` / `scope` (`project` | `global`
-  | `all` with de-dup). SDK-level `.strict()` rejection of unknown input
-  keys — the input schema is registered as the whole `ZodObject`, not
-  `.shape`.
+  in the per-project SQLite (new `lessons` table), once mirrored into a
+  separate cross-project global DB at `config.lessons.global_db_path`
+  (default `~/.vcf/lessons.db`). Lesson text runs through the existing
+  redaction pass before either persist, so an `sk-…` key lands as
+  `[REDACTED:openai-key]`. `lesson_search` accepts `query` / `tags`
+  (AND-filter) / `stage` / `scope` (`project` | `global` | `all` with
+  de-dup). SDK-level `.strict()` rejection of unknown input keys — the
+  input schema is registered as the whole `ZodObject`, not `.shape`.
+- **Cross-project lessons mirror can be disabled.** Setting
+  `config.lessons.global_db_path: null` in `config.yaml` disables the
+  mirror globally: `lesson_log_add` writes only to the project DB and
+  `lesson_search({ scope: "global" | "all" })` returns `E_SCOPE_DENIED`.
+  Closes followup #29 / security stage 1 documentation-only warning.
 - **`config.lessons` block** — `global_db_path` (optional, `~` expanded
-  at resolve time) + `default_scope` (`project` | `universal`). Surfaced
-  via `config_get section=lessons`.
+  at resolve time, `null` disables the mirror) + `default_scope`
+  (`project` | `universal`). Surfaced via `config_get section=lessons`.
 - **`E_UNWRITABLE` error code** — surfaced by `openGlobalLessonsDb` when
   the target directory cannot be created or lacks write permission.
 - **Redaction pattern for OpenAI / Anthropic-style keys** — bare
@@ -85,8 +194,8 @@ endpoint/model arguments by routing through `config.yaml`.
   and `.env`-style assignments.
 - **`project_init_existing` tool + `vcf adopt` CLI** (followup #20, bypass
   mode). Adopts a pre-existing project directory into VCF tracking without
-  scaffolding AGENTS.md/CLAUDE.md/plans/git-hooks. Creates `.vcf/project.db`
-  with `adopted=1`, registers in the global registry, defaults
+  scaffolding AGENTS.md/CLAUDE.md/plans/git-hooks. Creates the state-dir
+  project.db with `adopted=1`, registers in the global registry, defaults
   `project.state` to `reviewing` (the typical reason to adopt). Idempotent
   re-adoption preserves existing state + name. `strict` and `reconstruct`
   modes are reserved for future releases.
@@ -98,8 +207,22 @@ endpoint/model arguments by routing through `config.yaml`.
   resolves model via explicit arg → `defaults.review.model` → legacy
   `model_aliases` fallback. `vcf init` documents the block with a commented
   starter example.
+- **`vcf-usage-guide` common skill** (phase-2/D). Ships with `vcf install-skills`
+  for every supported client (claude-code / codex / gemini). Ground-truth
+  reference for the VCF lifecycle, tool index, error codes, and
+  decision/lesson/feedback/response taxonomy — lets a fresh LLM operator
+  get productive without reading the full README.
 
 ### Fixed
+
+- **Mid-review inline fixes landed during the 0.5.0 gate** (surfaced by the
+  27-stage self-review, code stages 4 + 6): (a) `src/mcp.ts` now guards
+  `resolved.projectDbPath` with `existsSync` before calling `openProjectDb`,
+  so a state-dir deleted externally between registration and boot exits 4
+  with a clear stderr pointing at `vcf adopt` rather than silently
+  recreating an empty DB; (b) `test/integration/m10.test.ts` swapped POSIX-only
+  `spawnSync("mkdir", ["-p", path])` for cross-platform `fs.mkdirSync(path,
+  { recursive: true })` so the Windows CI cell is truly exercised.
 
 - **`templatesDir()` resolved to the wrong directory in published installs**
   (followup #31). The hard-coded `../../templates` walk worked in dev (where
@@ -124,17 +247,33 @@ endpoint/model arguments by routing through `config.yaml`.
 
 ### Schema
 
-- Project DB migration v2: adds `adopted INTEGER NOT NULL DEFAULT 0` to the
-  `project` table. Existing project.dbs auto-migrate on next open; no
-  operator action required.
-  - **Rollback:** SQLite 3.35+ supports `ALTER TABLE project DROP COLUMN
-    adopted` — run that against the `.vcf/project.db` file(s) after
-    downgrading the vcf-cli package if an operator needs to return to a
-    0.3.2-era database. Alternatively, restore `project.db` and
-    `~/.vcf/vcf.db` from backup (both are plain SQLite files, safe to copy
-    with `cp` when vcf-mcp is not running). No down-migration ships with
-    the tool — the schema change is additive, so a forward-only path is
-    the norm for a developer CLI.
+- **Storage layout (breaking)**: per-project DB and review-run scratch
+  relocate from `<project>/.vcf/` to `~/.vcf/projects/<slug>/`. The SQLite
+  schema itself is unchanged; only the path on disk is different. No
+  down-migration ships — manual move (see Migration section) is the
+  supported downgrade recovery path.
+- **Project DB migration v5** (phase-2 A): adds `review_type` column to
+  the `decisions` table + index for same-type snapshot scoping. Existing
+  project.dbs auto-migrate on next open; no operator action required.
+- **Project DB migration v4** (phase-2 B): renames response-log columns
+  `review_run_id → run_id`, `stance → builder_claim`, `note → response_text`;
+  adds `finding_ref`, `references_json`, `migration_note`. Auto-applies on
+  next open.
+- **Project DB migration v3** (phase-2 A): adds `lessons` table with
+  redaction-friendly columns + indexes on `tags_json` and `created_at`.
+  Mirrored into `~/.vcf/lessons.db` (same schema) when
+  `config.lessons.global_db_path` is set.
+- **Project DB migration v2** (0.4 prep): adds `adopted INTEGER NOT NULL
+  DEFAULT 0` to the `project` table.
+  - **Rollback:** SQLite 3.35+ supports column drops; both column additions
+    (v2, v5) and column renames (v4) are reversible with manual DDL if an
+    operator downgrades. Plain SQLite files are safe to `cp` when vcf-mcp
+    is not running. Forward-only is the norm for a developer CLI.
+- **Global DB `state_cache` / `projects.root_path` invariant**: the
+  registry's `projects.root_path` is now the source of truth for scope
+  auto-detect. Hand-editing this column (e.g., during a project move) is
+  supported until `vcf project move` / `vcf project relocate` lands in
+  0.6.0.
 
 ### Review KB updates (shipped with `@kaelith-labs/kb`)
 
@@ -159,6 +298,10 @@ endpoint/model arguments by routing through `config.yaml`.
   - `lesson_log_add` (project scope) — write a lesson; dual-writes to the project DB and the global lessons mirror (`~/.vcf/lessons.db`) after redaction. Phase-2 A.
   - `lesson_search` (project scope) — query project/global/all lessons. Phase-2 A. Cross-project reads are intentional; see **Security boundaries** below.
   - `lifecycle_report` (project scope) — structured + narrative project report. Narrative mode routes project metadata outbound to `config.defaults.lifecycle_report`. Phase-2 C.
+- **Launch shape**: `vcf-mcp` no longer requires `--scope`. The flag is still
+  accepted as an explicit override, but the default is auto-detect via the
+  global registry. `vcf init` and `project_init` emit `.mcp.json` args
+  without the flag.
 
 ### Security boundaries documented for this release
 

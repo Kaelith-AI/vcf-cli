@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, realpath } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { openProjectDb, closeTrackedDbs } from "../helpers/db-cleanup.js";
+import { openGlobalDb, openProjectDb, closeTrackedDbs } from "../helpers/db-cleanup.js";
 
 // M10 exercises the built `vcf` CLI end-to-end. We shell out to
 // dist/cli.js so packaging regressions (missing file in "files",
@@ -65,11 +65,10 @@ describe("M10 vcf CLI", () => {
       "",
     ].join("\n");
     const path = join(home, ".vcf", "config.yaml");
-    // ensure dir exists synchronously
-    spawnSync("mkdir", ["-p", join(home, ".vcf")]);
-    // use node's sync writer
-
-    require("node:fs").writeFileSync(path, body);
+    // ensure dir exists synchronously — cross-platform
+    const fsSync = require("node:fs") as typeof import("node:fs");
+    fsSync.mkdirSync(join(home, ".vcf"), { recursive: true });
+    fsSync.writeFileSync(path, body);
     return path;
   }
 
@@ -83,8 +82,14 @@ describe("M10 vcf CLI", () => {
   });
 
   it("vcf reindex writes artifact rows for plans/decisions markdown", async () => {
-    // Seed a fake project.db + files.
-    const db = openProjectDb({ path: join(projectDir, ".vcf", "project.db") });
+    // Register project in the global registry, then seed the state-dir DB.
+    const { upsertProject } = await import("../../src/util/projectRegistry.js");
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    upsertProject(globalDb, { name: "demo", root_path: projectDir, state: "building" });
+    globalDb.close();
+
+    const statePath = join(home, ".vcf", "projects", "demo", "project.db");
+    const db = openProjectDb({ path: statePath });
     const now = Date.now();
     db.prepare(
       `INSERT INTO project (id, name, root_path, state, created_at, updated_at)
@@ -99,11 +104,11 @@ describe("M10 vcf CLI", () => {
       "# Decision\n",
     );
 
-    const res = runCli(["reindex"], { cwd: projectDir });
+    const res = runCli(["reindex"], { cwd: projectDir, env: { VCF_HOME: home } });
     expect(res.status).toBe(0);
     expect(res.stderr).toMatch(/reindex complete: 2/);
 
-    const verify = openProjectDb({ path: join(projectDir, ".vcf", "project.db") });
+    const verify = openProjectDb({ path: statePath });
     const kinds = (
       verify.prepare("SELECT kind FROM artifacts ORDER BY path").all() as { kind: string }[]
     ).map((r) => r.kind);
@@ -111,12 +116,12 @@ describe("M10 vcf CLI", () => {
     verify.close();
   });
 
-  it("vcf reindex fails E_STATE_INVALID without a project.db", () => {
+  it("vcf reindex fails without a registered project", async () => {
     const empty = join(workRoot, "empty");
-    spawnSync("mkdir", ["-p", empty]);
-    const res = runCli(["reindex"], { cwd: empty });
+    await mkdir(empty, { recursive: true });
+    const res = runCli(["reindex"], { cwd: empty, env: { VCF_HOME: home } });
     expect(res.status).toBe(2);
-    expect(res.stderr).toMatch(/no project\.db/);
+    expect(res.stderr).toMatch(/no registered VCF project/);
   });
 
   it("vcf verify reports config load success and endpoint env var status", async () => {
