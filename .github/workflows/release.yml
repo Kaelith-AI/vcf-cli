@@ -77,6 +77,65 @@ jobs:
               --generate-notes \
               --notes "Pinned: MCP spec 2025-11-25 · @modelcontextprotocol/sdk ^1.29"
 
+  sea-binaries:
+    # Followup #8: build Node SEA (single executable application) binaries
+    # for every platform + arch combo and attach them as release assets.
+    # Users who don't have Node installed can curl one file and run it.
+    needs: notes
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - os: macos-13
+            platform: darwin
+            arch: x64
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+          - os: windows-latest
+            platform: win
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install deps
+        run: npm ci
+      - name: Build dist
+        run: npm run build
+      - name: Build SEA binary
+        shell: bash
+        run: node scripts/build-sea.mjs
+      - name: Smoke-check SEA binary
+        shell: bash
+        run: |
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            ./dist/sea/vcf-cli-win-${{ matrix.arch }}.exe version
+          else
+            ./dist/sea/vcf-cli-${{ matrix.platform }}-${{ matrix.arch }} version
+          fi
+      - name: Upload to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            ASSET="dist/sea/vcf-cli-win-${{ matrix.arch }}.exe"
+          else
+            ASSET="dist/sea/vcf-cli-${{ matrix.platform }}-${{ matrix.arch }}"
+          fi
+          gh release upload "$TAG" "$ASSET" --clobber
+
   bump-brew:
     # Fire a repository_dispatch at Kaelith-Labs/homebrew-vcf so its
     # bump.yml workflow pulls the just-published tarball and updates

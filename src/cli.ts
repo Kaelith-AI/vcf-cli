@@ -571,6 +571,19 @@ program
     },
   );
 
+/**
+ * Run the CLI command parser. Split out from the module-body `if` so the
+ * SEA entry (src/sea-entry.ts) can call it unconditionally without the
+ * import.meta.url comparison that doesn't work in SEA bundles.
+ */
+export function parseArgv(cmd: Command = program): void {
+  cmd.parseAsync(process.argv).catch((e: unknown) => {
+    err(e instanceof Error ? e.message : String(e));
+  });
+}
+
+export { program };
+
 // Only parse argv when this file is run as the CLI entrypoint — otherwise
 // importing it from a test (or another module) would trigger a spurious
 // command parse against vitest's argv. `pathToFileURL` handles Windows
@@ -584,13 +597,19 @@ program
 // invocation. realpathSync canonicalizes both sides of the comparison.
 const entryUrl = (() => {
   const argv1 = process.argv[1];
-  if (!argv1) return "";
+  if (!argv1 || typeof argv1 !== "string" || argv1 === "") return "";
   try {
     return pathToFileURL(realpathSync(argv1)).href;
   } catch {
-    // Fallback if realpath fails (e.g. bundled single-file binary) —
-    // compare on the raw argv path, matching the pre-realpath behavior.
-    return pathToFileURL(argv1).href;
+    // Fallback if realpath fails (e.g. bundled single-file binary, SEA,
+    // or missing node_modules). pathToFileURL throws on undefined/empty
+    // too, so guard and return empty — the caller checks for equality,
+    // and a SEA binary runs its main via src/sea-entry.ts anyway.
+    try {
+      return pathToFileURL(argv1).href;
+    } catch {
+      return "";
+    }
   }
 })();
 if (import.meta.url === entryUrl) {

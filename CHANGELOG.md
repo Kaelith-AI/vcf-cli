@@ -45,6 +45,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- **SEA (single executable applications) build infrastructure (#8).** New
+  `sea-config.json` + `scripts/build-sea.mjs` + `npm run build:sea` produce
+  a standalone per-platform binary (`vcf-cli-<os>-<arch>[.exe]`) with the
+  CLI + a Node runtime bundled. Release workflow gains a `sea-binaries`
+  matrix job that builds across linux/darwin/windows × x64/arm64 and
+  uploads the binaries as GitHub release assets. A new `src/sea-entry.ts`
+  is the SEA `main` — imports `src/cli.ts` and calls `parseArgv` directly,
+  bypassing the `import.meta.url` check that doesn't resolve in a SEA
+  bundle. `postject` added as a devDependency for the blob-injection step.
+  Build infrastructure complete; the runtime `process.argv` startup path
+  inside a SEA binary still has a known startup-error edge case that
+  needs further iteration on cli.ts's entry guard (tracked as TODO in
+  the script; the pipeline itself is green).
 - **Model matrix review harness (#33).** `scripts/stress/review-matrix/run.mjs`
   generalizes the dual-model dogfood script to N models. Runs the 27-stage
   review (3 types × 9 stages) against every configured `(endpoint, model)`
