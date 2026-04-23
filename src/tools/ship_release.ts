@@ -99,6 +99,8 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
       // Captured during body execution; read by onComplete so per-path audit
       // shape (plan vs confirm+execute) is preserved without two audit calls.
       let auditBundle: { content?: unknown; result_code?: string } = {};
+      // Set when version_check fires a soft-warning (strict_chain=false path).
+      let versionWarn: string | null = null;
       return runTool(
         async () => {
           if (!deps.projectDb) {
@@ -107,6 +109,74 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
           const parsed = ShipReleaseInput.parse(args);
           const projectRoot = readProjectRoot(deps);
           if (!projectRoot) throw new McpError("E_STATE_INVALID", "project row missing");
+
+          // Strict-chain enforcement (followup #25 items 5+6).
+          // When config.ship.strict_chain=true, ship_release requires:
+          //   (a) a passing ship_audit row within the window
+          //   (b) a successful ship_build row within the window
+          //   (c) the tag is semver-newer than the last recorded release
+          // When config.ship.version_check=true (even without strict_chain),
+          // semver-order is checked and a warning is emitted (hard gate only
+          // when strict_chain is also true).
+          const shipCfg = deps.config.ship;
+          if (shipCfg.strict_chain || shipCfg.version_check) {
+            const windowMs = (shipCfg.strict_chain_window_minutes ?? 60) * 60_000;
+            const cutoffTs = Date.now() - windowMs;
+            if (shipCfg.strict_chain) {
+              // Check for a recent passing ship_audit row.
+              const auditRow = deps.globalDb
+                .prepare(
+                  `SELECT id FROM audit
+                   WHERE tool = 'ship_audit' AND result_code = 'ok'
+                     AND project_root = ? AND ts >= ?
+                   ORDER BY ts DESC LIMIT 1`,
+                )
+                .get(projectRoot, cutoffTs) as { id: number } | undefined;
+              if (!auditRow) {
+                throw new McpError(
+                  "E_STATE_INVALID",
+                  `ship.strict_chain is on: no passing ship_audit found for this project within the last ${shipCfg.strict_chain_window_minutes} minutes. Run ship_audit first.`,
+                );
+              }
+              // Check for a recent successful ship_build row.
+              const buildRow = deps.projectDb
+                .prepare(
+                  `SELECT id FROM builds
+                   WHERE target LIKE 'ship_build%' AND status = 'success'
+                     AND finished_at >= ?
+                   ORDER BY finished_at DESC LIMIT 1`,
+                )
+                .get(cutoffTs) as { id: number } | undefined;
+              if (!buildRow) {
+                throw new McpError(
+                  "E_STATE_INVALID",
+                  `ship.strict_chain is on: no successful ship_build found within the last ${shipCfg.strict_chain_window_minutes} minutes. Run ship_build first.`,
+                );
+              }
+            }
+            // Version-continuity check (item 6).
+            if (shipCfg.version_check || shipCfg.strict_chain) {
+              const lastRelease = deps.projectDb
+                .prepare(
+                  `SELECT target FROM builds
+                   WHERE target LIKE 'ship_release:%' AND status = 'success'
+                   ORDER BY finished_at DESC LIMIT 1`,
+                )
+                .get() as { target: string } | undefined;
+              if (lastRelease) {
+                const lastTag = lastRelease.target.replace(/^ship_release:/, "");
+                if (!isSemverNewer(parsed.tag, lastTag)) {
+                  const msg = `version-continuity: tag ${parsed.tag} is not semver-newer than the last release ${lastTag}`;
+                  if (shipCfg.strict_chain) {
+                    throw new McpError("E_VALIDATION", msg);
+                  } else {
+                    // soft-warn: surface in the summary but don't block
+                    versionWarn = msg;
+                  }
+                }
+              }
+            }
+          }
 
           // The plan payload the confirm_token binds to. We strip confirm_token
           // + expand so the user can toggle verbosity / pass the token back
@@ -240,8 +310,8 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
 
           const passed = result.exit_code === 0;
           const summary = passed
-            ? `ship_release: ${parsed.tag} created (${result.duration_ms}ms).`
-            : `ship_release: gh exited ${result.exit_code ?? "null"} — release NOT created.`;
+            ? `ship_release: ${parsed.tag} created (${result.duration_ms}ms).${versionWarn ? ` [WARNING: ${versionWarn}]` : ""}`
+            : `ship_release: gh exited ${result.exit_code ?? "null"} — release NOT created.${versionWarn ? ` [WARNING: ${versionWarn}]` : ""}`;
 
           // Run stdout/stderr through the secret redactor before surfacing
           // them in the envelope or the audit row. `gh` output can include
@@ -316,6 +386,39 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
       );
     },
   );
+}
+
+/**
+ * Returns true when `tag` is strictly semver-newer than `prior`.
+ * Both must be v-prefixed semver strings (e.g. "v1.2.3", "v0.1.0-alpha.0").
+ * Pre-release identifiers follow the semver.org precedence rules.
+ * Returns true when comparison is indeterminate (malformed input) to avoid
+ * false-blocking on unusual tag formats.
+ */
+export function isSemverNewer(tag: string, prior: string): boolean {
+  const parse = (t: string): [number, number, number, string] | null => {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)([-+].*)?$/.exec(t);
+    if (!m) return null;
+    return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] ?? ""];
+  };
+  const a = parse(tag);
+  const b = parse(prior);
+  if (!a || !b) return true; // indeterminate → allow
+  for (let i = 0; i < 3; i++) {
+    const ai = a[i] as number;
+    const bi = b[i] as number;
+    if (ai > bi) return true;
+    if (ai < bi) return false;
+  }
+  // Same numeric portion: pre-release < release per semver.
+  const aPre = a[3];
+  const bPre = b[3];
+  if (aPre === "" && bPre !== "") return true;  // release > pre-release
+  if (aPre !== "" && bPre === "") return false; // pre-release < release
+  if (aPre === bPre) return false; // identical tag — not strictly newer
+  // Both have pre-release; lexicographic comparison is a reasonable
+  // approximation for same-numeric-version pre-releases.
+  return aPre > bPre;
 }
 
 function buildGhArgs(parsed: Args, _projectRoot: string): { command: "gh"; args: string[] } {

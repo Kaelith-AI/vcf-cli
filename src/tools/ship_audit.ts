@@ -146,7 +146,8 @@ export function registerShipAudit(server: McpServer, deps: ServerDeps): void {
             if (addPass(pass)) return envelope(passes, parsed, root, deps);
           }
           if (shouldRun("personal-data")) {
-            const pass = await personalDataPass(files);
+            const allowList = deps.config.audit.personal_data?.allow_list ?? [];
+            const pass = await personalDataPass(files, allowList);
             if (addPass(pass)) return envelope(passes, parsed, root, deps);
           }
           if (shouldRun("config-completeness")) {
@@ -303,7 +304,11 @@ async function testDataResiduePass(files: string[]): Promise<PassResult> {
   };
 }
 
-async function personalDataPass(files: string[]): Promise<PassResult> {
+async function personalDataPass(
+  files: string[],
+  allowList: readonly string[] = [],
+): Promise<PassResult> {
+  const allowSet = new Set(allowList);
   const findings: Finding[] = [];
   for (const file of files) {
     if (file.includes(".env") === false && file.endsWith(".md")) continue;
@@ -314,6 +319,8 @@ async function personalDataPass(files: string[]): Promise<PassResult> {
     for (const m of emails) {
       // Allow obviously-fake placeholder addresses.
       if (/example\.(com|org|net)$/i.test(m[0])) continue;
+      // Allow exact matches in operator-configured allow list.
+      if (allowSet.has(m[0])) continue;
       findings.push({
         file,
         severity: "warning",
@@ -322,6 +329,7 @@ async function personalDataPass(files: string[]): Promise<PassResult> {
       if (findings.length >= 30) break;
     }
     for (const m of phones) {
+      if (allowSet.has(m[0])) continue;
       findings.push({
         file,
         severity: "warning",

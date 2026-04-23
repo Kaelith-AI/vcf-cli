@@ -39,7 +39,9 @@ const SpecSaveInput = z
     force: z
       .boolean()
       .default(false)
-      .describe("overwrite an existing file with the same date+slug (off by default)"),
+      .describe(
+        "overwrite an existing file with the same date+slug (off by default); also bypasses status-transition enforcement (audited)",
+      ),
     expand: z.boolean().default(false),
   })
   .strict();
@@ -63,6 +65,13 @@ const FrontmatterSchema = z
       .default([]),
     author_agent: z.string().max(128).optional(),
     domain: z.string().max(256).optional(),
+    // Followup #25: cross-spec links — pure metadata, no enforcement.
+    // Values are spec slugs that this spec relates to. Allows annotating
+    // cross-spec dependencies without graph queries.
+    related_specs: z
+      .array(z.string().regex(/^[a-z0-9][a-z0-9-]*$/))
+      .max(64)
+      .default([]),
   })
   .passthrough(); // extra fields allowed — the spec body is human-facing
 
@@ -76,6 +85,8 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
       inputSchema: SpecSaveInput.shape,
     },
     async (args: z.infer<typeof SpecSaveInput>) => {
+      // Captured when force=true bypasses an otherwise-illegal status transition.
+      let forcedTransition: string | null = null;
       return runTool(
         async () => {
           const parsed = SpecSaveInput.parse(args);
@@ -103,19 +114,38 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
           const target = join(specsDir, filename);
           await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
 
-          // Overwrite policy.
-          let exists = false;
+          // Overwrite policy + status-transition enforcement.
+          let existingContent: string | null = null;
           try {
-            await stat(target);
-            exists = true;
+            const { readFile: readFileFs } = await import("node:fs/promises");
+            existingContent = await readFileFs(target, "utf8");
           } catch {
             /* not present */
           }
-          if (exists && !parsed.force) {
+          if (existingContent !== null && !parsed.force) {
             throw new McpError(
               "E_ALREADY_EXISTS",
               `${target} already exists — pass force=true to overwrite`,
             );
+          }
+
+          // Status-transition enforcement (followup #25 item 7).
+          // Allowed: draft→accepted, draft→archived, accepted→archived.
+          // archived is terminal. force=true bypasses (audited below).
+          if (existingContent !== null) {
+            const priorFm = extractFrontmatter(existingContent);
+            const priorStatus = (priorFm?.["status"] as string | undefined) ?? "draft";
+            const nextStatus = validated.status;
+            if (!isLegalTransition(priorStatus, nextStatus)) {
+              if (!parsed.force) {
+                throw new McpError(
+                  "E_STATE_INVALID",
+                  `illegal spec status transition: ${priorStatus} → ${nextStatus}. Allowed: draft→accepted|archived, accepted→archived. archived is terminal. Pass force=true to override.`,
+                );
+              }
+              // force=true path — will be noted in audit summary below.
+              forcedTransition = `${priorStatus} → ${nextStatus}`;
+            }
           }
 
           await writeFile(target, parsed.content, { encoding: "utf8" });
@@ -145,7 +175,7 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
 
           const payload = success(
             [target],
-            `Saved spec "${validated.title}" -> ${filename} (status=${validated.status}, tech_stack=${validated.tech_stack.length} tag(s)).`,
+            `Saved spec "${validated.title}" -> ${filename} (status=${validated.status}, tech_stack=${validated.tech_stack.length} tag(s))${forcedTransition ? ` [FORCE override: ${forcedTransition}]` : ""}.`,
             parsed.expand
               ? {
                   content: {
@@ -153,6 +183,7 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
                     slug,
                     date,
                     frontmatter: validated,
+                    forced_transition: forcedTransition ?? undefined,
                   },
                 }
               : {
@@ -166,7 +197,7 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
           writeAudit(deps.globalDb, {
             tool: "spec_save",
             scope: "global",
-            inputs: args,
+            inputs: { ...args, forced_transition_override: forcedTransition ?? undefined },
             outputs: payload,
             result_code: payload.ok ? "ok" : payload.code,
           });
@@ -208,3 +239,21 @@ function extractFrontmatter(raw: string): Record<string, unknown> | null {
 }
 
 export { FrontmatterSchema as SpecFrontmatterSchema };
+
+/**
+ * Spec status transition whitelist (followup #25 item 7).
+ *   draft    → accepted | archived
+ *   accepted → archived
+ *   archived → (terminal — no transitions allowed)
+ *
+ * Same-status writes (no transition) are always legal.
+ */
+export function isLegalTransition(from: string, to: string): boolean {
+  if (from === to) return true; // same status: re-save is always allowed
+  const allowed: Record<string, string[]> = {
+    draft: ["accepted", "archived"],
+    accepted: ["archived"],
+    archived: [], // terminal
+  };
+  return (allowed[from] ?? []).includes(to);
+}

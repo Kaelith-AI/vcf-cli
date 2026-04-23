@@ -7,6 +7,7 @@ domain: _TBD_
 tags: []
 tech_stack: []
 lens: []
+# related_specs: []   # optional: slug(s) of specs this one relates to, e.g. [auth-service, data-model]
 ---
 
 # Project Spec: {{PROJECT_NAME}}

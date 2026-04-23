@@ -52,6 +52,7 @@ import { registerReviewHistory } from "./tools/review_history.js";
 import { registerShipAudit } from "./tools/ship_audit.js";
 import { registerShipBuild } from "./tools/ship_build.js";
 import { registerShipRelease } from "./tools/ship_release.js";
+import { registerCycleStatus } from "./tools/cycle_status.js";
 import { registerProjectMove } from "./tools/project_move.js";
 import { registerProjectRename } from "./tools/project_rename.js";
 import { registerProjectRelocate } from "./tools/project_relocate.js";
@@ -202,6 +203,7 @@ export function createServer(deps: ServerDeps): McpServer {
     registerShipAudit(server, deps);
     registerShipBuild(server, deps);
     registerShipRelease(server, deps);
+    registerCycleStatus(server, deps);
     // PM-only admin tools: registered when the current project carries
     // role='pm' in the global registry. Non-PM sessions never see these.
     if (deps.resolved.projectRole === "pm") {

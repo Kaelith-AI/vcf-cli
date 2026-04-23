@@ -235,6 +235,19 @@ export const TelemetrySchema = z
 
 // ---- Audit (full-payload mode, off by default) -----------------------------
 
+export const AuditPersonalDataSchema = z
+  .object({
+    // Exact-match allow-list for the ship_audit personal-data pass.
+    // Strings in this list suppress warnings when the personal-data
+    // scanner finds them in source/docs. Typical use: contributor emails
+    // in README, maintainer addresses in CODEOWNERS, contact sections.
+    // Only exact-match suppression — no glob or regex.
+    allow_list: z.array(z.string().min(1).max(512)).max(256).default([]),
+  })
+  .strict();
+
+export type AuditPersonalData = z.infer<typeof AuditPersonalDataSchema>;
+
 export const AuditSchema = z
   .object({
     // When true, audit rows also store the redacted JSON of the tool's
@@ -244,6 +257,9 @@ export const AuditSchema = z
     // redacted before storage, so the risk delta vs. hash-only is that the
     // shape of the payload becomes visible.
     full_payload_storage: z.boolean().default(false),
+    // Followup #25 item 4: personal-data allow-list for ship_audit.
+    // Suppresses exact-match warnings (e.g. a README author email).
+    personal_data: AuditPersonalDataSchema.default({ allow_list: [] }),
   })
   .strict();
 
@@ -374,6 +390,40 @@ export const EmbeddingsSchema = z
   })
   .strict();
 
+// ---- Ship (release-gate knobs) ---------------------------------------------
+//
+// Followup #25 items 5 + 6: strict_chain requires passing ship_audit and
+// ship_build before ship_release is allowed (for the current tag). The
+// window within which prior results are accepted is configurable (default
+// 60 minutes). version_check adds a semver-order check: the provided tag
+// must be strictly newer than the last release recorded in project.db.
+
+export const ShipSchema = z
+  .object({
+    // When true, ship_release refuses to execute unless a passing ship_audit
+    // AND a successful ship_build are recorded in the audit log within the
+    // last `strict_chain_window_minutes` minutes. Default false — preserves
+    // pre-0.7.0 behavior where the chain is advisory only.
+    strict_chain: z.boolean().default(false),
+    // How far back (in minutes) ship_release looks for a passing audit+build
+    // pair when strict_chain is true. Default 60 minutes.
+    strict_chain_window_minutes: z
+      .number()
+      .int()
+      .positive()
+      .max(1440)
+      .default(60),
+    // When true, ship_release additionally rejects if the provided tag is not
+    // semver-newer than the last recorded release. With strict_chain=false
+    // this is a soft-warn path: the tool logs a warning but still proceeds.
+    // With strict_chain=true this becomes a hard gate (E_VALIDATION).
+    // Default false.
+    version_check: z.boolean().default(false),
+  })
+  .strict();
+
+export type Ship = z.infer<typeof ShipSchema>;
+
 // ---- Top-level --------------------------------------------------------------
 
 export const ConfigSchema = z
@@ -401,7 +451,7 @@ export const ConfigSchema = z
       extra_patterns: [],
     }),
     telemetry: TelemetrySchema.default({ error_reporting_enabled: false }),
-    audit: AuditSchema.default({ full_payload_storage: false }),
+    audit: AuditSchema.default({ full_payload_storage: false, personal_data: { allow_list: [] } }),
     embeddings: EmbeddingsSchema.optional(),
     defaults: DefaultsSchema.optional(),
     lessons: LessonsSchema.default({ default_scope: "project", mirror_policy: "write-and-read" }),
@@ -419,6 +469,11 @@ export const ConfigSchema = z
     report: ReportSchema.default({
       audit_rows_per_section: 500,
       recent_rows_per_section: 50,
+    }),
+    ship: ShipSchema.default({
+      strict_chain: false,
+      strict_chain_window_minutes: 60,
+      version_check: false,
     }),
   })
   .strict()

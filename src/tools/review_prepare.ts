@@ -344,16 +344,58 @@ async function copyReviewerFile(deps: ServerDeps, type: string, runDir: string):
 
 async function selectLenses(
   deps: ServerDeps,
-  _root: string,
+  root: string,
 ): Promise<Array<{ id: string; path: string }>> {
   const entries = await loadKbCached(deps.config.kb.root, deps.config.kb.packs);
-  // No spec tags available here without re-parsing; MVP returns all lenses.
-  // M9 will refine this to the spec's tech_stack / lens intersection when
-  // review_prepare accepts a plan_name input.
-  const lenses = entries.filter((e) => e.kind === "lens").map((e) => ({ id: e.id, path: e.path }));
-  // Use matchPrimers API to stabilize ordering — unused output here.
-  matchPrimers([], { tech_tags: [] }); // no-op, keeps import alive
+
+  // Followup #25 item 8: intersect lenses with spec tags.
+  // Pull spec tags from the project DB (spec_path column) so we don't need
+  // to re-parse the file. Lenses with empty tags[] are always-on (they
+  // match every spec). Lenses whose tags[] intersect the spec's combined
+  // tag set (tech_stack ∪ tags ∪ lens) are included; all others are excluded.
+  const specTags = await resolveSpecTags(deps, root);
+  const lenses = entries
+    .filter((e) => e.kind === "lens")
+    .filter((e) => {
+      // A lens with no tags is always-on.
+      if (e.tags.length === 0) return true;
+      // A lens whose applies_to is non-empty intersects if the review type matches;
+      // we don't have the review type here so we also treat non-empty applies_to
+      // as always-on from the lens-selection perspective.
+      // The primary filter is: spec tags ∩ lens tags ≠ ∅.
+      if (specTags.size === 0) return true; // no spec tags → include all lenses
+      return e.tags.some((t) => specTags.has(t));
+    })
+    .map((e) => ({ id: e.id, path: e.path }));
+
+  // Use matchPrimers API to stabilize ordering — keeps import alive.
+  matchPrimers([], { tech_tags: [] }); // no-op
   return lenses;
+}
+
+/**
+ * Resolve the spec tags for the current project by reading the global DB
+ * `specs` table (path is recorded in project.spec_path). Returns the union
+ * of tech_stack + tags + lens fields from the spec frontmatter. Falls back
+ * to an empty set when no spec is registered or the DB lookup fails.
+ */
+async function resolveSpecTags(deps: ServerDeps, _root: string): Promise<Set<string>> {
+  try {
+    const specRow = deps.projectDb
+      ?.prepare("SELECT spec_path FROM project WHERE id = 1")
+      .get() as { spec_path: string | null } | undefined;
+    if (!specRow?.spec_path) return new Set();
+
+    const specRow2 = deps.globalDb
+      .prepare("SELECT tags FROM specs WHERE path = ?")
+      .get(specRow.spec_path) as { tags: string } | undefined;
+    if (!specRow2) return new Set();
+
+    const tags = JSON.parse(specRow2.tags) as string[];
+    return new Set(Array.isArray(tags) ? tags : []);
+  } catch {
+    return new Set();
+  }
 }
 
 function loadPriorCarryForward(deps: ServerDeps, type: string, stage: number): CarryForward {

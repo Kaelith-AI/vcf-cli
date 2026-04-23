@@ -10,7 +10,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { mkdir, writeFile, stat } from "node:fs/promises";
+import { mkdir, writeFile, stat, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { ServerDeps } from "../server.js";
@@ -91,6 +91,24 @@ export function registerPlanSave(server: McpServer, deps: ServerDeps): void {
             }
           }
 
+          // Backup prior trio before overwriting (followup #25 item 3).
+          let backupDir: string | null = null;
+          if (parsed.force) {
+            const anyExist = (await Promise.all(targets.map(([t]) => exists(t)))).some(Boolean);
+            if (anyExist) {
+              const isoTs = new Date().toISOString().replace(/[:.]/g, "-");
+              const backupsRoot = resolveOutputs(projectRoot, deps.config).backupsDir;
+              backupDir = join(backupsRoot, ".plan-backups", `${parsed.name}-${isoTs}`);
+              await mkdir(backupDir, { recursive: true });
+              for (const [target] of targets) {
+                if (await exists(target)) {
+                  const fname = target.split("/").at(-1)!;
+                  await rename(target, join(backupDir, fname));
+                }
+              }
+            }
+          }
+
           const written: string[] = [];
           for (const [target, content] of targets) {
             await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
@@ -122,9 +140,9 @@ export function registerPlanSave(server: McpServer, deps: ServerDeps): void {
 
           return success(
             written,
-            `Saved plan "${parsed.name}" (3 files) and advanced project state → ${parsed.advance_state}.`,
+            `Saved plan "${parsed.name}" (3 files) and advanced project state → ${parsed.advance_state}.${backupDir ? ` Prior trio backed up to ${backupDir}` : ""}`,
             parsed.expand
-              ? { content: { written, state: parsed.advance_state } }
+              ? { content: { written, state: parsed.advance_state, backed_up_to: backupDir ?? undefined } }
               : {
                   expand_hint:
                     "Call plan_save with expand=true to receive the file list + new state.",

@@ -84,9 +84,12 @@ program
 
 program
   .command("reindex")
-  .description("Re-scan plans/ memory/ docs/ into the project's SQLite index.")
+  .description(
+    "Re-scan plans/ memory/ docs/ into the project's SQLite index. Pass --ideas to reconcile the global ideas table against the ideas_dir on disk.",
+  )
   .option("--project <path>", "project root (defaults to current directory)")
-  .action(async (opts: { project?: string }) => {
+  .option("--ideas", "reconcile global DB ideas table against workspace.ideas_dir on disk")
+  .action(async (opts: { project?: string; ideas?: boolean }) => {
     try {
       await runReindex(opts);
     } catch (e) {
