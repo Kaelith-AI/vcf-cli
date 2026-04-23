@@ -419,8 +419,14 @@ describe("#25 item 4 — audit.personal_data.allow_list suppresses email warning
 
   it("allow_list entry with the exact email suppresses the warning", async () => {
     const email = "maintainer@kaelith.dev";
-    // ship_audit's SCAN_EXT set scans .yaml/.yml — so put the email in a
-    // yaml file where personalDataPass will actually see it.
+    // Post-fix: ship_audit scans .md files (README, CONTRIBUTORS, etc.),
+    // so README.md is the canonical place for this leak. Also drop a copy
+    // in a .yaml to confirm the allow-list applies across file types.
+    await writeFile(
+      join(projectDir, "README.md"),
+      `# Demo\n\nMaintainer: ${email}\n`,
+      "utf8",
+    );
     await writeFile(
       join(projectDir, "contacts.yaml"),
       `owner: Kaelith\ncontact: ${email}\n`,
@@ -443,6 +449,10 @@ describe("#25 item 4 — audit.personal_data.allow_list suppresses email warning
       const pd = c.passes.find((p) => p.name === "personal-data");
       expect(pd).toBeDefined();
       expect(pd!.findings.some((f) => f.detail.includes(email))).toBe(true);
+      // Post-fix: the README.md hit should be present too.
+      expect(
+        pd!.findings.some((f) => f.detail.includes(email) && /README\.md$/.test((f as { file: string }).file)),
+      ).toBe(true);
       closeTrackedDbs();
     }
 

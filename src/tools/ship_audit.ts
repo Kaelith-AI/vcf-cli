@@ -71,6 +71,10 @@ const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 const PHONE_RE = /(?:\+?1[\s-])?\(?[2-9]\d{2}\)?[\s-]\d{3}[\s-]\d{4}\b/g;
 
 // Files we scan. Anything under these extensions; ignore common vendor paths.
+// Note: `.md` is included so the personal-data pass catches emails leaking
+// into README / CONTRIBUTORS / docs. Passes that don't care about docs
+// (hardcoded-path, test-data-residue) already skip `.md` via their own
+// per-file check.
 const SCAN_EXT = new Set([
   ".ts",
   ".tsx",
@@ -89,7 +93,13 @@ const SCAN_EXT = new Set([
   ".yaml",
   ".yml",
   ".toml",
+  ".md",
 ]);
+
+// Exact basenames (dotfiles, env files) to scan in addition to SCAN_EXT.
+// `.env` and its common variants don't have a dot-suffix the ext walker
+// recognizes, so enumerate them explicitly.
+const SCAN_BASENAME_PREFIXES = [".env"];
 const SKIP_DIRS = new Set([
   "node_modules",
   "dist",
@@ -311,7 +321,6 @@ async function personalDataPass(
   const allowSet = new Set(allowList);
   const findings: Finding[] = [];
   for (const file of files) {
-    if (file.includes(".env") === false && file.endsWith(".md")) continue;
     const body = await safeRead(file);
     if (!body) continue;
     const emails = Array.from(body.matchAll(EMAIL_RE));
@@ -431,7 +440,12 @@ async function collectFiles(root: string): Promise<string[]> {
       } else if (st.isFile()) {
         const dot = full.lastIndexOf(".");
         const ext = dot >= 0 ? full.slice(dot) : "";
-        if (SCAN_EXT.has(ext)) out.push(full);
+        if (
+          SCAN_EXT.has(ext) ||
+          SCAN_BASENAME_PREFIXES.some((p) => name.startsWith(p))
+        ) {
+          out.push(full);
+        }
       }
     }
   }

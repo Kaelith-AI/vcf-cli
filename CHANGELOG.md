@@ -51,6 +51,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   plan_save --force backup, audit allow_list suppression, ship
   strict_chain + version_check, review lens intersection, `vcf reindex
   --ideas` CLI). 13 new test cases; 389 tests pass.
+
+### Fixed
+
+- **ship_audit personal-data pass now actually scans docs.** `SCAN_EXT`
+  previously excluded `.md` — combined with a dead condition
+  `if (file.includes(".env") === false && file.endsWith(".md")) continue;`
+  in `personalDataPass`, README / CONTRIBUTORS / doc files were silently
+  skipped while the audit claimed to scan them. Fix: add `.md` to
+  `SCAN_EXT`, add `.env*` to a new `SCAN_BASENAME_PREFIXES` set for env
+  files that have no extension the walker recognizes, and drop the dead
+  skip check in the pass. Sweep test expanded to cover the README.md
+  path + cross-file allow-list suppression.
 - **Extensible review-type builder + research scaffolding (#21, #29).**
   Three new global-scope MCP tools. Primary #21 shape per user's spec:
   review types are meticulously crafted via a multi-subagent flow, not
