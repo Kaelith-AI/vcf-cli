@@ -263,6 +263,16 @@ export const LessonsSchema = z
     // Most lessons are project-specific; promote to `universal` only when
     // the observation is cross-project guidance.
     default_scope: z.enum(["project", "universal"]).default("project"),
+    // Followup #41: finer-grained isolation than global_db_path: null.
+    //   'write-and-read' — normal (default). Writes mirror out; cross-scope reads return both.
+    //   'write-only'     — writes mirror out; cross-scope reads refuse with E_SCOPE_DENIED.
+    //   'read-only'      — writes stay local (envelope surfaces 'policy-suppressed'); cross-scope reads work.
+    //   'off'            — neither writes nor reads (same as global_db_path: null, but separable from path).
+    // Per-project override is a future followup (needs a per-project
+    // config merge); today this knob is global-only.
+    mirror_policy: z
+      .enum(["write-and-read", "write-only", "read-only", "off"])
+      .default("write-and-read"),
   })
   .strict();
 
@@ -335,7 +345,7 @@ export const ConfigSchema = z
     audit: AuditSchema.default({ full_payload_storage: false }),
     embeddings: EmbeddingsSchema.optional(),
     defaults: DefaultsSchema.optional(),
-    lessons: LessonsSchema.default({ default_scope: "project" }),
+    lessons: LessonsSchema.default({ default_scope: "project", mirror_policy: "write-and-read" }),
     report: ReportSchema.default({
       audit_rows_per_section: 500,
       recent_rows_per_section: 50,

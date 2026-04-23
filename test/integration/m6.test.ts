@@ -194,6 +194,37 @@ describe("M6 test pipeline (project scope)", () => {
     expect(count).toBe(1);
   });
 
+  it("test_execute also writes a cross-project test_runs row (#17)", async () => {
+    const { client, globalDb } = await connectProject();
+    const env = parseResult(
+      await client.callTool({
+        name: "test_execute",
+        arguments: {
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          timeout_ms: 5_000,
+        },
+      }),
+    );
+    expect(env.ok).toBe(true);
+    const row = globalDb
+      .prepare(
+        "SELECT project_root, command, passed, exit_code, args_json FROM test_runs ORDER BY id DESC LIMIT 1",
+      )
+      .get() as {
+      project_root: string;
+      command: string;
+      passed: number;
+      exit_code: number | null;
+      args_json: string;
+    };
+    expect(row.project_root).toBe(projectDir);
+    expect(row.command).toBe("node");
+    expect(row.passed).toBe(1);
+    expect(row.exit_code).toBe(0);
+    expect(JSON.parse(row.args_json)).toEqual(["-e", "process.exit(0)"]);
+  });
+
   it("test_execute returns exit_code=1 for a failing command; envelope ok remains true", async () => {
     const { client } = await connectProject();
     const env = parseResult(

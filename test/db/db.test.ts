@@ -27,6 +27,7 @@ describe("global DB", () => {
     expect(tables).toContain("model_aliases");
     expect(tables).toContain("audit");
     expect(tables).toContain("config_boots");
+    expect(tables).toContain("test_runs");
     expect(tables).toContain("schema_migrations");
     db.close();
   });
@@ -38,7 +39,7 @@ describe("global DB", () => {
     const db = openGlobalDb({ path: p });
     const rows = db.prepare("SELECT version FROM schema_migrations").all();
     // All migrations applied exactly once; adding a new migration bumps this.
-    expect(rows.length).toBe(5);
+    expect(rows.length).toBe(6);
     db.close();
   });
 

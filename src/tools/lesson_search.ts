@@ -94,6 +94,17 @@ export function registerLessonSearch(server: McpServer, deps: ServerDeps): void 
 
           let globalRows: LessonRow[] = [];
           if (parsed.scope !== "project") {
+            const mirrorPolicy = deps.config.lessons.mirror_policy;
+            // Policy gate (followup #41). `write-only` projects refuse
+            // cross-scope reads even when the mirror file exists — the
+            // boundary is intentional, not a config error.
+            if (mirrorPolicy === "write-only" || mirrorPolicy === "off") {
+              throw new McpError(
+                "E_SCOPE_DENIED",
+                `lesson_search(scope="${parsed.scope}") is disabled by config.lessons.mirror_policy="${mirrorPolicy}". ` +
+                  `Use scope="project" for this-project lessons, or relax the policy in ~/.vcf/config.yaml.`,
+              );
+            }
             const globalDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
             if (globalDb === null) {
               // Operator has set `config.lessons.global_db_path: null` to

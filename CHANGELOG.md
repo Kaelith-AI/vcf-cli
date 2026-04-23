@@ -11,6 +11,20 @@ work across 11 items from `plans/2026-04-20-followups.md`.
 
 ### Added
 
+- **`config.lessons.mirror_policy` (followup #41).** New enum
+  `write-and-read | write-only | read-only | off`. `write-only` lets a
+  project contribute to the cross-project lessons mirror without letting
+  cross-scope `lesson_search` reads complete; `read-only` keeps writes
+  local but allows cross-scope queries. Default preserves prior behavior.
+  Global-only for now — per-project override waits on a per-project
+  config merge.
+- **`test_runs` cross-project table + `vcf test-trends` CLI (followup
+  #17).** Every `test_execute` call now also writes a row into
+  `~/.vcf/vcf.db.test_runs` so the operator can ask "how are tests
+  trending across my portfolio?" without opening every project.db.
+  Summary mode aggregates per-project (total runs, pass-rate, median /
+  p95 duration, last-seen); `--format=runs` prints raw rows;
+  `--format=json` is machine-readable.
 - **`vcf backup` + `vcf restore` CLI (followup #49).** Tarball-based
   snapshot + restore for `~/.vcf/` subsets (`projects` | `global` | `kb`
   | `all`). Shells out to `tar` so no new npm dep is needed. Restore is
@@ -73,6 +87,9 @@ work across 11 items from `plans/2026-04-20-followups.md`.
 
 ### Schema
 
+- **Global DB v6: `test_runs` table** — cross-project mirror of every
+  `test_execute` call. Indexed on `project_root`, `started_at`,
+  `passed` for the trend queries above.
 - **Global DB v5: `config_boots` table** — forensic snapshot of config
   path + ctime + mtime + sha256 + prev_sha256 + pid + vcf_version per
   `vcf-mcp` boot.

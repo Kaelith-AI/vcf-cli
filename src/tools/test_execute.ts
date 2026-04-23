@@ -186,6 +186,35 @@ export function registerTestExecute(server: McpServer, deps: ServerDeps): void {
               null,
             );
 
+          // Followup #17: also write a cross-project row into globalDb.test_runs
+          // so `vcf test-trends` can query without touching every project.db.
+          // Failures are non-fatal — the tool call is complete either way.
+          try {
+            deps.globalDb
+              .prepare(
+                `INSERT INTO test_runs
+                   (project_root, command, args_json, cwd, started_at, finished_at,
+                    duration_ms, exit_code, signal, timed_out, canceled, passed)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                auditProjectRoot ?? "",
+                parsed.command,
+                JSON.stringify(parsed.args),
+                cwdCanonical,
+                startedAt,
+                startedAt + result.duration_ms,
+                result.duration_ms,
+                result.exit_code,
+                result.signal,
+                result.timed_out ? 1 : 0,
+                result.canceled ? 1 : 0,
+                passed ? 1 : 0,
+              );
+          } catch {
+            /* non-fatal */
+          }
+
           const payload = success(
             [cwdCanonical],
             summary,

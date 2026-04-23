@@ -158,6 +158,36 @@ export const GLOBAL_MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_config_boots_ts ON config_boots(ts);
     `,
   },
+  {
+    version: 6,
+    name: "test_runs",
+    up: `
+      -- Followup #17: cross-project test-run telemetry. project.db.builds
+      -- captures local test history, but there's no cross-project
+      -- surface to answer "how have tests trended across my portfolio
+      -- in the last N days?" Each test_execute call also writes here so
+      -- 'vcf test-trends' can query without having to open every
+      -- project.db.
+      CREATE TABLE IF NOT EXISTS test_runs (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_root    TEXT NOT NULL,
+        command         TEXT NOT NULL,
+        args_json       TEXT NOT NULL DEFAULT '[]',
+        cwd             TEXT NOT NULL,
+        started_at      INTEGER NOT NULL,
+        finished_at     INTEGER NOT NULL,
+        duration_ms     INTEGER NOT NULL,
+        exit_code       INTEGER,
+        signal          TEXT,
+        timed_out       INTEGER NOT NULL DEFAULT 0,  -- 0 | 1
+        canceled        INTEGER NOT NULL DEFAULT 0,  -- 0 | 1
+        passed          INTEGER NOT NULL             -- 0 | 1
+      );
+      CREATE INDEX IF NOT EXISTS idx_test_runs_project ON test_runs(project_root);
+      CREATE INDEX IF NOT EXISTS idx_test_runs_started ON test_runs(started_at);
+      CREATE INDEX IF NOT EXISTS idx_test_runs_passed ON test_runs(passed);
+    `,
+  },
 ];
 
 export const PROJECT_MIGRATIONS: Migration[] = [

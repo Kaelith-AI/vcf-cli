@@ -37,6 +37,7 @@ import { runAdminAudit, runAdminConfigHistory } from "./cli/admin.js";
 import { runBackup, runRestore } from "./cli/backup.js";
 import { runLessonsReconcile } from "./cli/lessons.js";
 import { runMigrate03 } from "./cli/migrate.js";
+import { runTestTrends } from "./cli/testTrends.js";
 
 // Backward-compat re-exports. `test/update-primers.test.ts` and
 // `test/init-kb-seed.test.ts` import these from "../src/cli.js". Keep the
@@ -541,6 +542,27 @@ migrateCmd
     }) => {
       try {
         await runMigrate03(opts);
+      } catch (e) {
+        err((e as Error).message);
+      }
+    },
+  );
+
+program
+  .command("test-trends")
+  .description(
+    "Query the cross-project test_runs table. Summarizes pass-rate, duration p95, last-seen per project (default). --format=runs prints raw rows; --format=json is machine-readable.",
+  )
+  .option("--project <path>", "filter to one project root")
+  .option("--since <iso>", "include only runs started on/after this date")
+  .option("--limit <n>", "cap raw rows scanned before aggregation (default 500, max 5000)", (v) =>
+    parseInt(v, 10),
+  )
+  .option("--format <fmt>", "summary | runs | json (default: summary)", "summary")
+  .action(
+    async (opts: { project?: string; since?: string; limit?: number; format: string }) => {
+      try {
+        await runTestTrends(opts);
       } catch (e) {
         err((e as Error).message);
       }

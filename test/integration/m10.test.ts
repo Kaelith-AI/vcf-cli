@@ -158,6 +158,45 @@ describe("M10 vcf CLI", () => {
     expect(updated).toMatch(/auth_env_var: OPENAI_API_KEY/);
   });
 
+  it("vcf test-trends aggregates cross-project test runs written by test_execute (#17)", async () => {
+    const cfg = writeConfig();
+    // Seed a handful of test_runs rows across two projects.
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    const insert = globalDb.prepare(
+      `INSERT INTO test_runs (project_root, command, args_json, cwd, started_at, finished_at,
+                              duration_ms, exit_code, signal, timed_out, canceled, passed)
+       VALUES (?, 'vitest', '[]', ?, ?, ?, ?, ?, NULL, 0, 0, ?)`,
+    );
+    const base = Date.now();
+    const rows: Array<[string, number, number]> = [
+      [projectDir, base - 3000, 1],
+      [projectDir, base - 2000, 1],
+      [projectDir, base - 1000, 0],
+      ["/tmp/other-proj", base - 500, 1],
+    ];
+    for (const [root, started, passed] of rows) {
+      insert.run(root, root, started, started + 100, 100, passed === 1 ? 0 : 1, passed);
+    }
+    globalDb.close();
+
+    const res = runCli(["test-trends", "--format", "json"], {
+      env: { VCF_CONFIG: cfg, VCF_HOME: home },
+    });
+    expect(res.status).toBe(0);
+    const summaries = JSON.parse(res.stdout) as Array<{
+      project_root: string;
+      total_runs: number;
+      passed: number;
+      failed: number;
+    }>;
+    expect(summaries).toHaveLength(2);
+    const mine = summaries.find((s) => s.project_root === projectDir);
+    expect(mine).toBeDefined();
+    expect(mine?.total_runs).toBe(3);
+    expect(mine?.passed).toBe(2);
+    expect(mine?.failed).toBe(1);
+  });
+
   it("vcf admin audit returns an empty table from a fresh global DB", () => {
     const cfg = writeConfig();
     const res = runCli(["admin", "audit", "--format", "json"], {

@@ -110,21 +110,37 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
           );
           const projectLessonId = Number(projectRun.lastInsertRowid);
 
-          // Global DB mirror. Three outcomes:
+          // Global DB mirror. Possible outcomes:
           //   - `disabled-by-config`: operator set `config.lessons.global_db_path: null`
-          //     to opt out of cross-project mirroring. Skip cleanly, no error.
+          //     OR `config.lessons.mirror_policy: "off"` to opt out of
+          //     cross-project mirroring. Skip cleanly, no error.
+          //   - `policy-suppressed`: mirror_policy='read-only' — the project
+          //     may query the mirror but this write is deliberately suppressed.
           //   - success: write mirrored, id returned, project row flipped to 'mirrored'.
           //   - failure: local write is authoritative; log the mirror error
           //     into the envelope and audit but do not fail the tool call.
           //     Project row is marked 'failed' so reconcile will retry it.
           let globalLessonId: number | null = null;
-          let globalMirrorStatus: "ok" | "disabled-by-config" | "failed" = "ok";
+          let globalMirrorStatus:
+            | "ok"
+            | "disabled-by-config"
+            | "policy-suppressed"
+            | "failed" = "ok";
           let globalMirrorError: string | null = null;
-          const globalDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
+          const mirrorPolicy = deps.config.lessons.mirror_policy;
+          const policyDisables = mirrorPolicy === "off";
+          const policySuppressesWrite =
+            mirrorPolicy === "read-only" || mirrorPolicy === "off";
+          const globalDb =
+            policyDisables ? null : getGlobalLessonsDb(deps.config.lessons.global_db_path);
           if (globalDb === null) {
             globalMirrorStatus = "disabled-by-config";
             // Row stays mirror_status='pending' — a later reconcile after
             // the operator re-enables the mirror will drain it.
+          } else if (policySuppressesWrite) {
+            globalMirrorStatus = "policy-suppressed";
+            // Row stays mirror_status='pending'. If the operator flips the
+            // policy later, `vcf lessons reconcile` drains the backlog.
           } else {
             try {
               const globalRun = globalDb
@@ -169,6 +185,8 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
           if (redactionApplied) summaryParts.push("redaction-applied");
           if (globalMirrorStatus === "disabled-by-config")
             summaryParts.push("mirror-disabled-by-config");
+          else if (globalMirrorStatus === "policy-suppressed")
+            summaryParts.push("mirror-policy-suppressed");
           else if (globalMirrorStatus === "failed") summaryParts.push("mirror-failed");
 
           return success([], summaryParts.join("; "), {
