@@ -45,6 +45,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- **#25 sweep tests** — integration coverage for the 8 ship-items that
+  landed in commit 6cb0ae2 without tests (cycle_status happy+needs-test
+  paths, spec status transitions, related_specs frontmatter + template,
+  plan_save --force backup, audit allow_list suppression, ship
+  strict_chain + version_check, review lens intersection, `vcf reindex
+  --ideas` CLI). 13 new test cases; 389 tests pass.
 - **Extensible review-type builder + research scaffolding (#21, #29).**
   Three new global-scope MCP tools. Primary #21 shape per user's spec:
   review types are meticulously crafted via a multi-subagent flow, not
