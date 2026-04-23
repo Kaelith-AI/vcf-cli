@@ -17,8 +17,15 @@ export default defineConfig({
   splitting: false,
   treeshake: true,
   shims: false,
+  // `env -S` forwards multiple args to `node`. `--disable-warning=
+  // ExperimentalWarning` silences the `node:sqlite` ExperimentalWarning
+  // that otherwise prints on every `vcf` / `vcf-mcp` invocation (cosmetic
+  // noise; will self-resolve once node:sqlite hits stability-2). `env -S`
+  // is GNU coreutils ≥ 8.30 (Linux) and macOS ≥ 10.15, both required by
+  // our Node 22.13+ engine floor. Windows bin shims re-invoke `node`
+  // directly and ignore shebangs — unaffected either way.
   banner: {
-    js: "#!/usr/bin/env node",
+    js: "#!/usr/bin/env -S node --disable-warning=ExperimentalWarning",
   },
   // Post-build: restore the `node:` prefix on built-in imports that have no
   // bare alias (`sqlite`, `test`, `sea`). tsup strips the prefix during its

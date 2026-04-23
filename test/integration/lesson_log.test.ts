@@ -214,6 +214,87 @@ describe("lesson_log_add / lesson_search (Phase A)", () => {
     expect(text).toMatch(/__bogus/);
   });
 
+  it("tracks mirror_status='mirrored' on successful lesson_log_add writes (#42)", async () => {
+    const { client, projectDb } = await bootProjectScope();
+    const res = await client.callTool({
+      name: "lesson_log_add",
+      arguments: { title: "mirror-tracking-1", observation: "first write", tags: ["m42"] },
+    });
+    const env = parseResult(res);
+    expect(env.ok).toBe(true);
+    const { lesson_id } = env.content as { lesson_id: number };
+    const row = projectDb
+      .prepare("SELECT mirror_status FROM lessons WHERE id = ?")
+      .get(lesson_id) as { mirror_status: string };
+    expect(row.mirror_status).toBe("mirrored");
+  });
+
+  it("leaves mirror_status='pending' when config.lessons.global_db_path is null (#42)", async () => {
+    // Re-boot with the mirror disabled.
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    const dbPath = join(home, ".vcf", "projects", "disabled-demo", "project.db");
+    const projectDb = openProjectDb({ path: dbPath });
+    projectDb
+      .prepare(
+        `INSERT INTO project (id, name, root_path, state, created_at, updated_at)
+         VALUES (1, 'disabled-demo', ?, 'building', ?, ?)`,
+      )
+      .run(projectDir, Date.now(), Date.now());
+    const resolved: ResolvedScope = {
+      scope: "project",
+      projectRoot: projectDir,
+      projectSlug: "disabled-demo",
+      projectDbPath: dbPath,
+    };
+    const config = ConfigSchema.parse({
+      version: 1,
+      workspace: {
+        allowed_roots: [workRoot],
+        ideas_dir: join(workRoot, "ideas"),
+        specs_dir: join(workRoot, "specs"),
+      },
+      endpoints: [
+        {
+          name: "local-stub",
+          provider: "local-stub",
+          base_url: "http://127.0.0.1:1",
+          trust_level: "local",
+        },
+      ],
+      kb: { root: kbRoot },
+      lessons: { global_db_path: null },
+    });
+    resetGlobalLessonsCache();
+    const server = createServer({
+      scope: "project",
+      resolved,
+      config,
+      globalDb,
+      projectDb,
+      homeDir: home,
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const client = new Client({ name: "t2", version: "0" }, { capabilities: {} });
+    await client.connect(b);
+
+    const res = await client.callTool({
+      name: "lesson_log_add",
+      arguments: { title: "disabled-write", observation: "mirror off", tags: ["m42"] },
+    });
+    const env = parseResult(res);
+    expect(env.ok).toBe(true);
+    const { lesson_id, mirror_status } = env.content as {
+      lesson_id: number;
+      mirror_status: string;
+    };
+    expect(mirror_status).toBe("disabled-by-config");
+    const row = projectDb
+      .prepare("SELECT mirror_status FROM lessons WHERE id = ?")
+      .get(lesson_id) as { mirror_status: string };
+    expect(row.mirror_status).toBe("pending");
+  });
+
   it("project-DB migration v2 → v3 is idempotent on re-open", async () => {
     // Fresh project DB, migrate once.
     const dbPath = join(workRoot, ".vcf", "idem.db");

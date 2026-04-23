@@ -22,6 +22,7 @@ import { openProjectDb } from "./db/project.js";
 import { VERSION } from "./version.js";
 import { log } from "./logger.js";
 import { resolveReporter } from "./telemetry/reporter.js";
+import { recordConfigBoot } from "./util/configBoot.js";
 
 async function main(): Promise<void> {
   const program = new Command();
@@ -61,6 +62,25 @@ async function main(): Promise<void> {
   // the registry to find the project that owns cwd.
   const globalDbPath = resolvePath(homedir(), ".vcf", "vcf.db");
   const globalDb = openGlobalDb({ path: globalDbPath });
+
+  // Followup #48 — capture a config-integrity boot snapshot. Non-fatal on
+  // failure; the function catches its own IO/DB errors. When the sha256
+  // differs from the previous boot's sha256 for this path, emit a single
+  // stderr note so operators who run vcf-mcp interactively see the delta
+  // without having to query the audit table. The MCP stdio transport is
+  // on stdin/stdout; stderr is safe for human notes.
+  const bootSnapshot = recordConfigBoot(globalDb, configPath, VERSION);
+  if (
+    bootSnapshot.prev_sha256 !== null &&
+    bootSnapshot.sha256 !== null &&
+    bootSnapshot.prev_sha256 !== bootSnapshot.sha256
+  ) {
+    const prev = bootSnapshot.prev_sha256.slice(0, 12);
+    const curr = bootSnapshot.sha256.slice(0, 12);
+    process.stderr.write(
+      `vcf-mcp: config changed since last boot (${configPath}): ${prev} → ${curr}\n`,
+    );
+  }
 
   const resolved = resolveScope(
     opts.scope !== undefined

@@ -73,8 +73,24 @@ export function registerLessonSearch(server: McpServer, deps: ServerDeps): void 
           const parsed = LessonSearchInput.parse(args);
 
           const projectRoot = readProjectRoot(deps);
+
+          // Followup #40: SQL pushdown. Push `stage`, per-tag LIKE, and
+          // the free-text `query` into WHERE so the database never
+          // materializes more than ~5× limit rows per source into memory.
+          // Ordering by created_at DESC means truncation preserves recency.
+          // Final ranking (exact-phrase > startswith > tag-hit count > age)
+          // still happens in-process — trivial on a bounded candidate set.
+          const pushdown = {
+            query: parsed.query ?? null,
+            tags: parsed.tags,
+            stage: parsed.stage ?? null,
+            capLimit: Math.min(1000, parsed.limit * 5),
+          };
+
           const projectRows =
-            parsed.scope === "global" ? [] : readLessons(deps.projectDb, projectRoot);
+            parsed.scope === "global"
+              ? []
+              : readLessonsFiltered(deps.projectDb, projectRoot, false, pushdown);
 
           let globalRows: LessonRow[] = [];
           if (parsed.scope !== "project") {
@@ -90,7 +106,7 @@ export function registerLessonSearch(server: McpServer, deps: ServerDeps): void 
                   `Use scope="project" for this-project lessons, or re-enable the mirror in ~/.vcf/config.yaml.`,
               );
             }
-            globalRows = readLessons(globalDb, null);
+            globalRows = readLessonsFiltered(globalDb, null, true, pushdown);
           }
 
           const candidates: Array<{ row: LessonRow; source: "project" | "global" }> = [
@@ -181,31 +197,69 @@ export function registerLessonSearch(server: McpServer, deps: ServerDeps): void 
   );
 }
 
-function readLessons(
+interface PushdownOptions {
+  query: string | null;
+  tags: string[];
+  stage: string | null;
+  /** Hard cap on rows returned before in-memory ranking. */
+  capLimit: number;
+}
+
+/**
+ * SQL pushdown for lesson_search (followup #40). Stage + tag AND + free-text
+ * query are evaluated in SQL; the DB returns at most `capLimit` rows,
+ * newest first. Final ranking + cross-source de-dup happens in the caller.
+ *
+ * `hasProjectRoot` distinguishes the global lessons schema (which has a
+ * project_root column) from the per-project one (which doesn't). Keeps the
+ * SELECT lists explicit — cheaper than probing `PRAGMA table_info` on
+ * every call and safer than a try/catch-driven fallback.
+ */
+function readLessonsFiltered(
   db: import("node:sqlite").DatabaseSync,
   projectRoot: string | null,
+  hasProjectRoot: boolean,
+  opts: PushdownOptions,
 ): LessonRow[] {
-  // Try to read project_root if present in the row (global DB has it).
-  // Project DB rows lack that column — fall back to the caller-supplied root.
-  try {
-    const rows = db
-      .prepare(
-        `SELECT id, project_root, title, context, observation, actionable_takeaway,
-                scope, stage, tags_json, created_at
-           FROM lessons`,
-      )
-      .all() as unknown as LessonRow[];
-    return rows;
-  } catch {
-    const rows = db
-      .prepare(
-        `SELECT id, title, context, observation, actionable_takeaway,
-                scope, stage, tags_json, created_at
-           FROM lessons`,
-      )
-      .all() as unknown as Omit<LessonRow, "project_root">[];
-    return rows.map((r) => ({ ...r, project_root: projectRoot }));
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+
+  if (opts.stage) {
+    where.push("stage = ?");
+    params.push(opts.stage);
   }
+  for (const tag of opts.tags) {
+    // tags_json is `[ "foo", "bar" ]` — LIKE '%"<tag>"%' matches the
+    // quoted token exactly because kebab-case tag tokens never appear as
+    // a substring of a longer quoted token ("foo" can't match "foo-bar"
+    // because the quote boundaries differ).
+    where.push("tags_json LIKE ?");
+    params.push(`%"${tag}"%`);
+  }
+  if (opts.query && opts.query.length > 0) {
+    where.push(
+      "(LOWER(title) LIKE ?1 OR LOWER(observation) LIKE ?1 OR LOWER(COALESCE(actionable_takeaway,'')) LIKE ?1 OR LOWER(COALESCE(context,'')) LIKE ?1)"
+        .replace(/\?1/g, "?"),
+    );
+    const like = `%${opts.query.toLowerCase()}%`;
+    // Same like value appears 4× in the SQL; push 4 copies.
+    params.push(like, like, like, like);
+  }
+
+  const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  const projectRootSelect = hasProjectRoot ? "project_root" : "NULL AS project_root";
+  const sql = `SELECT id, ${projectRootSelect}, title, context, observation,
+                      actionable_takeaway, scope, stage, tags_json, created_at
+                 FROM lessons
+                 ${whereClause}
+                 ORDER BY created_at DESC
+                 LIMIT ${opts.capLimit}`;
+  const rows = db.prepare(sql).all(...params) as unknown as LessonRow[];
+  if (hasProjectRoot) return rows;
+  // Per-project DB: project_root came back as NULL from the SELECT above.
+  // Fill from the caller-supplied root so ranking + de-dup keys are
+  // consistent with the global-sourced rows.
+  return rows.map((r) => ({ ...r, project_root: projectRoot }));
 }
 
 function safeParseTags(json: string): string[] {

@@ -40,6 +40,7 @@ import { registerDecisionLogAdd, registerDecisionLogList } from "./tools/decisio
 import { registerResponseLogAdd } from "./tools/response_log.js";
 import { registerLessonLogAdd } from "./tools/lesson_log_add.js";
 import { registerLessonSearch } from "./tools/lesson_search.js";
+import { registerFeedbackAdd, registerFeedbackList } from "./tools/feedback.js";
 import { registerLifecycleReport } from "./tools/lifecycle_report.js";
 import { registerTestGenerate } from "./tools/test_generate.js";
 import { registerTestExecute } from "./tools/test_execute.js";
@@ -188,6 +189,8 @@ export function createServer(deps: ServerDeps): McpServer {
     registerResponseLogAdd(server, deps);
     registerLessonLogAdd(server, deps);
     registerLessonSearch(server, deps);
+    registerFeedbackAdd(server, deps);
+    registerFeedbackList(server, deps);
     registerLifecycleReport(server, deps);
     registerTestGenerate(server, deps);
     registerTestExecute(server, deps);

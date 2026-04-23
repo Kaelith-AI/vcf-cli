@@ -43,6 +43,24 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   // before .env-style so a bare `sk-abc...` gets the specific marker rather
   // than the generic [REDACTED].
   [/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED:openai-key]"],
+  // GitHub tokens: classic PATs (ghp_), OAuth (gho_), server-to-server
+  // (ghs_), user-to-server refresh (ghr_), user-to-server (ghu_).
+  // Classic + app-issued tokens are ≥36 trailing [A-Za-z0-9].
+  [/\bgh[oprsu]_[A-Za-z0-9]{30,}\b/g, "[REDACTED:github-token]"],
+  // GitHub fine-grained personal access tokens
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[REDACTED:github-pat]"],
+  // Stripe API keys — live / test, secret / restricted / publishable variants
+  [/\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{20,}\b/g, "[REDACTED:stripe-key]"],
+  // Slack tokens — bot (xoxb), user (xoxp), app-level (xoxa), refresh (xoxe),
+  // config (xoxc), user-session (xoxu), legacy (xoxs), bearer (xoxr), oauth
+  // (xoxo). Wide char class covers every documented prefix.
+  [/\bxox[a-z]-[A-Za-z0-9-]{10,}/g, "[REDACTED:slack-token]"],
+  // Slack incoming-webhook URLs
+  [/https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9\/_-]+/g, "[REDACTED:slack-webhook]"],
+  // Google API keys — AIza prefix + exactly 35 chars from [A-Za-z0-9_-].
+  // Negative lookahead (not \b) so a trailing `-` or `_` doesn't prevent
+  // the match (neither counts as a word boundary on its right edge).
+  [/\bAIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g, "[REDACTED:google-api-key]"],
   // JWT
   [/eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, "[JWT]"],
   // PEM private keys
@@ -50,7 +68,9 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
     /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |)PRIVATE KEY-----[\s\S]*?-----END [^-]+-----/g,
     "[PRIVATE_KEY]",
   ],
-  // .env-style assignments: KEY="secret" or KEY=secret
+  // .env-style assignments: KEY="secret" or KEY=secret. Runs last so
+  // specific markers (above) win for bare tokens; this catches anything
+  // else shaped like a shell env-var assignment.
   [/\b([A-Z_][A-Z0-9_]{2,})\s*=\s*(["']?)[^\s"'\n]+\2/g, "$1=[REDACTED]"],
 ];
 

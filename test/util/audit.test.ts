@@ -32,6 +32,74 @@ describe("redact", () => {
     expect(result.note).toContain("API_KEY=[REDACTED]");
   });
 
+  it("redacts GitHub classic PATs (ghp_), OAuth (gho_), server-to-server (ghs_)", () => {
+    const samples = [
+      "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "gho_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "ghs_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+      "ghr_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    ];
+    for (const t of samples) {
+      const out = redact(`token is ${t} trailing`) as string;
+      expect(out).toContain("[REDACTED:github-token]");
+      expect(out).not.toContain(t);
+    }
+  });
+
+  it("redacts GitHub fine-grained PATs (github_pat_)", () => {
+    const t = "github_pat_11ABCDEFG0123456789abcdef_XYZzyxwvutsrqponmlkjihgfedcba987654321";
+    const out = redact(t);
+    expect(out).toBe("[REDACTED:github-pat]");
+  });
+
+  it("redacts Stripe live + test keys (sk/rk/pk × live/test)", () => {
+    const samples = [
+      "sk_live_abcdefghijklmnopqrstuvwx",
+      "sk_test_abcdefghijklmnopqrstuvwx",
+      "rk_live_abcdefghijklmnopqrstuvwx",
+      "pk_test_abcdefghijklmnopqrstuvwx",
+    ];
+    for (const t of samples) {
+      const out = redact(`key=${t}`) as string;
+      // Either the specific marker or the generic env-var [REDACTED]; both
+      // are acceptable — the load-bearing behavior is that the raw value
+      // disappears.
+      expect(out).not.toContain(t);
+    }
+  });
+
+  it("redacts bare Stripe keys outside env assignments to the specific marker", () => {
+    const out = redact("our key is sk_live_ZZZZZZZZZZZZZZZZZZZZZZZZ in docs");
+    expect(out).toContain("[REDACTED:stripe-key]");
+    expect(out).not.toContain("sk_live_Z");
+  });
+
+  it("redacts Slack tokens (xoxb-, xoxp-, etc.)", () => {
+    const samples = [
+      "xoxb-1234567890-0987654321098-AbCdEfGhIjKlMnOpQrStUvWx",
+      "xoxp-1234567890-abc-def-ghi",
+      "xoxa-2-0123456789",
+    ];
+    for (const t of samples) {
+      const out = redact(t);
+      expect(out).toBe("[REDACTED:slack-token]");
+    }
+  });
+
+  it("redacts Slack webhook URLs", () => {
+    const url = "https://hooks.slack.com/services/T01234567/B01234567/abcdefghijklmnopqrstuvwx";
+    expect(redact(url)).toBe("[REDACTED:slack-webhook]");
+  });
+
+  it("redacts Google API keys (AIza prefix + 35 chars)", () => {
+    const key = "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ0123_-a";
+    expect(redact(key)).toBe("[REDACTED:google-api-key]");
+    // 39 chars surrounded by text
+    const withContext = redact(`config key=${key} more text`) as string;
+    expect(withContext).toContain("[REDACTED:google-api-key]");
+    expect(withContext).not.toContain(key);
+  });
+
   it("walks arrays and objects recursively", () => {
     const out = redact({
       nested: [

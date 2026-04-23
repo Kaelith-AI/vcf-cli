@@ -87,11 +87,16 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
 
           const tagsJson = JSON.stringify(parsed.tags);
 
-          // Project DB write.
+          // Project DB write. mirror_status starts pending and flips to
+          // 'mirrored' on a successful global write or 'failed' on a DB
+          // error below. Rows that stay non-mirrored are targets for
+          // `vcf lessons reconcile` (followup #42). When the mirror is
+          // disabled by config we leave it pending so a later re-enable
+          // + reconcile picks them up.
           const projectInsert = deps.projectDb.prepare(
             `INSERT INTO lessons
-               (title, context, observation, actionable_takeaway, scope, stage, tags_json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+               (title, context, observation, actionable_takeaway, scope, stage, tags_json, created_at, mirror_status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
           );
           const projectRun = projectInsert.run(
             redactedBody.title,
@@ -108,15 +113,18 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
           // Global DB mirror. Three outcomes:
           //   - `disabled-by-config`: operator set `config.lessons.global_db_path: null`
           //     to opt out of cross-project mirroring. Skip cleanly, no error.
-          //   - success: write mirrored, id returned.
+          //   - success: write mirrored, id returned, project row flipped to 'mirrored'.
           //   - failure: local write is authoritative; log the mirror error
           //     into the envelope and audit but do not fail the tool call.
+          //     Project row is marked 'failed' so reconcile will retry it.
           let globalLessonId: number | null = null;
           let globalMirrorStatus: "ok" | "disabled-by-config" | "failed" = "ok";
           let globalMirrorError: string | null = null;
           const globalDb = getGlobalLessonsDb(deps.config.lessons.global_db_path);
           if (globalDb === null) {
             globalMirrorStatus = "disabled-by-config";
+            // Row stays mirror_status='pending' — a later reconcile after
+            // the operator re-enables the mirror will drain it.
           } else {
             try {
               const globalRun = globalDb
@@ -137,9 +145,19 @@ export function registerLessonLogAdd(server: McpServer, deps: ServerDeps): void 
                   createdAt,
                 );
               globalLessonId = Number(globalRun.lastInsertRowid);
+              deps.projectDb
+                .prepare(`UPDATE lessons SET mirror_status = 'mirrored' WHERE id = ?`)
+                .run(projectLessonId);
             } catch (err) {
               globalMirrorStatus = "failed";
               globalMirrorError = err instanceof Error ? err.message : String(err);
+              try {
+                deps.projectDb
+                  .prepare(`UPDATE lessons SET mirror_status = 'failed' WHERE id = ?`)
+                  .run(projectLessonId);
+              } catch {
+                /* non-fatal bookkeeping */
+              }
             }
           }
 

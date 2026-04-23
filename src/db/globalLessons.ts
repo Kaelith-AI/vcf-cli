@@ -45,6 +45,20 @@ export const GLOBAL_LESSONS_MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_global_lessons_created ON lessons(created_at);
     `,
   },
+  {
+    version: 2,
+    name: "mirror_idempotency_index",
+    up: `
+      -- Followup #42: 'vcf lessons reconcile' needs a stable identity for
+      -- "is this lesson already in the mirror?" so repeated reconcile runs
+      -- don't duplicate rows. (project_root, title, created_at) is unique
+      -- enough at ms granularity — collision odds are negligible in a
+      -- single-operator corpus. A UNIQUE index also lets us fold the
+      -- existence check into the upsert path via INSERT OR IGNORE.
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_global_lessons_identity
+        ON lessons(project_root, title, created_at);
+    `,
+  },
 ];
 
 /**

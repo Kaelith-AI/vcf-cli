@@ -132,6 +132,32 @@ export const GLOBAL_MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_projects_role ON projects(role);
     `,
   },
+  {
+    version: 5,
+    name: "config_boots",
+    up: `
+      -- Followup #48: config integrity forensics. Every vcf-mcp boot
+      -- captures (config_path, ctime, mtime, sha256) so an operator can
+      -- spot a post-hoc endpoint-config swap via 'vcf admin
+      -- config-history'. prev_sha256 lets the reader see when the hash
+      -- changed between boots without re-running the query twice.
+      CREATE TABLE IF NOT EXISTS config_boots (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts              INTEGER NOT NULL,        -- ms since epoch (boot wall time)
+        config_path     TEXT NOT NULL,           -- resolved absolute path
+        exists_on_disk  INTEGER NOT NULL,        -- 0 | 1 (file present at boot)
+        ctime_ms        INTEGER,                 -- filesystem ctime; NULL if !exists
+        mtime_ms        INTEGER,                 -- filesystem mtime; NULL if !exists
+        size_bytes      INTEGER,                 -- NULL if !exists
+        sha256          TEXT,                    -- sha256 of bytes; NULL if !exists
+        prev_sha256     TEXT,                    -- sha256 from the previous boot row for this path; NULL on first ever boot
+        pid             INTEGER NOT NULL,        -- process.pid of the booting process
+        vcf_version     TEXT NOT NULL            -- VERSION constant at boot time
+      );
+      CREATE INDEX IF NOT EXISTS idx_config_boots_path_ts ON config_boots(config_path, ts);
+      CREATE INDEX IF NOT EXISTS idx_config_boots_ts ON config_boots(ts);
+    `,
+  },
 ];
 
 export const PROJECT_MIGRATIONS: Migration[] = [
@@ -281,6 +307,49 @@ export const PROJECT_MIGRATIONS: Migration[] = [
       -- across all review types.
       ALTER TABLE decisions ADD COLUMN review_type TEXT;
       CREATE INDEX IF NOT EXISTS idx_decisions_review_type ON decisions(review_type);
+    `,
+  },
+  {
+    version: 6,
+    name: "lessons_mirror_status",
+    up: `
+      -- Followup #42: track mirror state on each lesson so operators can
+      -- reconcile after a transient global-DB failure. 'pending' = new
+      -- row, not yet written to mirror; 'mirrored' = write succeeded;
+      -- 'failed' = write raised. Existing rows default to 'mirrored' —
+      -- they were written under the old code path that mirrored
+      -- unconditionally and never retried. Operators who want to force a
+      -- re-mirror of legacy rows can 'UPDATE lessons SET
+      -- mirror_status = ''pending''' then run 'vcf lessons reconcile'.
+      ALTER TABLE lessons
+        ADD COLUMN mirror_status TEXT NOT NULL DEFAULT 'mirrored'
+          CHECK (mirror_status IN ('pending', 'mirrored', 'failed'));
+      CREATE INDEX IF NOT EXISTS idx_lessons_mirror_status ON lessons(mirror_status);
+    `,
+  },
+  {
+    version: 7,
+    name: "feedback",
+    up: `
+      -- Followup #18: lightweight ad-hoc feedback channel. Distinct from
+      -- lesson_log (which wants structured context + observation +
+      -- takeaway) — feedback is the "sigh, that was annoying" one-liner
+      -- that the improvement cycle triages later.
+      --
+      -- urgency: low | normal | high. NULL = normal (default at write
+      -- time). stage is optional — some feedback ("the CLI help is
+      -- confusing") doesn't map to a lifecycle stage.
+      CREATE TABLE IF NOT EXISTS feedback (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        note        TEXT NOT NULL,
+        stage       TEXT CHECK (stage IS NULL OR stage IN (
+                      'draft','planning','building','testing','reviewing','shipping','shipped'
+                    )),
+        urgency     TEXT CHECK (urgency IS NULL OR urgency IN ('low','normal','high')),
+        created_at  INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at);
+      CREATE INDEX IF NOT EXISTS idx_feedback_stage ON feedback(stage);
     `,
   },
 ];

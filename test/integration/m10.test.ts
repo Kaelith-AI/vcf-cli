@@ -168,6 +168,72 @@ describe("M10 vcf CLI", () => {
     expect(res.stdout.trim()).toBe("[]");
   });
 
+  it("vcf admin config-history prints JSON rows recorded by vcf-mcp boot (#48)", async () => {
+    // We can't actually spawn vcf-mcp here (it'd block on stdio). Instead,
+    // directly write a boot row via the helper and then query via CLI.
+    const cfg = writeConfig();
+    const { recordConfigBoot } = await import("../../src/util/configBoot.js");
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    recordConfigBoot(globalDb, cfg, "0.6.0");
+    globalDb.close();
+    const res = runCli(["admin", "config-history", "--format", "json"], {
+      env: { VCF_CONFIG: cfg, VCF_HOME: home },
+    });
+    expect(res.status).toBe(0);
+    const rows = JSON.parse(res.stdout) as Array<{ config_path: string; sha256: string | null }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].config_path).toBe(cfg);
+    expect(rows[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("vcf lessons reconcile drains pending rows into the global mirror (#42)", async () => {
+    const cfg = writeConfig();
+    // Register project + project.db with a pending lesson.
+    const { upsertProject } = await import("../../src/util/projectRegistry.js");
+    const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
+    upsertProject(globalDb, { name: "recon-demo", root_path: projectDir, state: "building" });
+    globalDb.close();
+    const statePath = join(home, ".vcf", "projects", "recon-demo", "project.db");
+    const projectDb = openProjectDb({ path: statePath });
+    const now = Date.now();
+    projectDb
+      .prepare(
+        `INSERT INTO project (id, name, root_path, state, created_at, updated_at)
+         VALUES (1, 'recon-demo', ?, 'building', ?, ?)`,
+      )
+      .run(projectDir, now, now);
+    projectDb
+      .prepare(
+        `INSERT INTO lessons (title, context, observation, actionable_takeaway, scope, stage,
+                              tags_json, created_at, mirror_status)
+         VALUES ('pending lesson', NULL, 'observation body', NULL, 'project', 'building',
+                 '[]', ?, 'pending')`,
+      )
+      .run(now);
+    projectDb.close();
+
+    const res = runCli(["lessons", "reconcile", "--project", projectDir, "--format", "json"], {
+      env: { VCF_CONFIG: cfg, VCF_HOME: home },
+    });
+    expect(res.status).toBe(0);
+    const reports = JSON.parse(res.stdout) as Array<{
+      slug: string;
+      attempted: number;
+      mirrored: number;
+    }>;
+    expect(reports).toHaveLength(1);
+    expect(reports[0].attempted).toBe(1);
+    expect(reports[0].mirrored).toBe(1);
+
+    // Row flipped to mirrored + actually present in the global mirror.
+    const verify = openProjectDb({ path: statePath });
+    const row = verify.prepare("SELECT mirror_status FROM lessons").get() as {
+      mirror_status: string;
+    };
+    expect(row.mirror_status).toBe("mirrored");
+    verify.close();
+  });
+
   it("vcf install-skills claude-code copies every shipped skill with Claude /foo invocation", async () => {
     const dest = join(workRoot, "claude-skills");
     const res = runCli(["install-skills", "claude-code", "--dest", dest]);

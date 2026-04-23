@@ -17,10 +17,31 @@
 // users. Auto-detect is the default.
 
 import type { DatabaseSync } from "node:sqlite";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { McpError } from "./errors.js";
 import { projectDbPath as stateDbPath } from "./project/stateDir.js";
+
+/**
+ * Resolve a path through the OS's canonical realpath when possible.
+ * Falls back to logical `resolve()` if the path doesn't exist (the registry
+ * can legitimately hold rows whose root_path was later deleted off disk).
+ *
+ * On macOS/APFS and Windows/NTFS the filesystem is case-insensitive but our
+ * string compare is case-sensitive. `realpathSync` returns the canonical
+ * case on disk, so canonicalizing both sides before comparing matches a
+ * `cwd` of `/users/foo/proj` to a registered `/Users/Foo/Proj`. Symlinks
+ * resolve identically, so a shim pointing into a registered project also
+ * picks up project scope.
+ */
+function canonicalize(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
 
 export type Scope = "global" | "project";
 
@@ -62,7 +83,7 @@ export interface ResolvedScope {
  *   (no walk-up — explicit project scope means "this exact directory").
  */
 export function resolveScope(input: ResolveScopeInput): ResolvedScope {
-  const cwd = resolve(input.cwd);
+  const cwd = canonicalize(input.cwd);
   const home = input.homeDir ?? homedir();
 
   if (input.requested === "global") {
@@ -103,19 +124,25 @@ function toRole(raw: string | undefined): ProjectRole {
   return raw === "pm" ? "pm" : "standard";
 }
 
-/** Exact match of `cwd` against registered root_paths. */
+/** Exact match of canonicalized `cwd` against registered root_paths. */
 function lookupRegistered(
   cwd: string,
   globalDb: DatabaseSync,
 ): { root_path: string; slug: string; role: ProjectRole } | null {
-  const row = globalDb
-    .prepare("SELECT name, root_path, role FROM projects WHERE root_path = ?")
-    .get(cwd) as { name: string; root_path: string; role: string } | undefined;
-  if (!row) return null;
-  return { root_path: row.root_path, slug: row.name, role: toRole(row.role) };
+  const rows = globalDb.prepare("SELECT name, root_path, role FROM projects").all() as Array<{
+    name: string;
+    root_path: string;
+    role: string;
+  }>;
+  for (const r of rows) {
+    if (canonicalize(r.root_path) === cwd) {
+      return { root_path: r.root_path, slug: r.name, role: toRole(r.role) };
+    }
+  }
+  return null;
 }
 
-/** Walk-up from cwd, match each level against registered root_paths. */
+/** Walk-up from canonicalized cwd, match each level against registered root_paths. */
 function findProjectAtOrAbove(
   startCwd: string,
   globalDb: DatabaseSync,
@@ -126,13 +153,21 @@ function findProjectAtOrAbove(
     role: string;
   }>;
   if (rows.length === 0) return null;
-  const byPath = new Map<string, { slug: string; role: ProjectRole }>();
-  for (const r of rows) byPath.set(resolve(r.root_path), { slug: r.name, role: toRole(r.role) });
+  const byPath = new Map<string, { slug: string; role: ProjectRole; root_path: string }>();
+  for (const r of rows) {
+    byPath.set(canonicalize(r.root_path), {
+      slug: r.name,
+      role: toRole(r.role),
+      root_path: r.root_path,
+    });
+  }
 
   let dir = startCwd;
   while (true) {
     const hit = byPath.get(dir);
-    if (hit !== undefined) return { root_path: dir, slug: hit.slug, role: hit.role };
+    if (hit !== undefined) {
+      return { root_path: hit.root_path, slug: hit.slug, role: hit.role };
+    }
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;

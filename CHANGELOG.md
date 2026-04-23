@@ -6,7 +6,95 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## Unreleased
 
-_No unreleased changes yet._
+Followup backlog sweep — a batch of correctness, refactor, and light-feature
+work across 11 items from `plans/2026-04-20-followups.md`.
+
+### Added
+
+- **`vcf backup` + `vcf restore` CLI (followup #49).** Tarball-based
+  snapshot + restore for `~/.vcf/` subsets (`projects` | `global` | `kb`
+  | `all`). Shells out to `tar` so no new npm dep is needed. Restore is
+  conflict-safe — existing targets are skipped by default; `--replace`
+  opts in to overwrite; `--dry-run` reports the plan without writing.
+- **`vcf migrate 0.3` CLI (followup #50).** Automates the 0.3 → 0.5
+  state-dir refactor documented in the 0.5.0 CHANGELOG: copies an in-tree
+  `<project>/.vcf/project.db` to `~/.vcf/projects/<slug>/`, rewrites
+  `root_path`, upserts the registry, moves `.review-runs/` out of the
+  tree, and (with `--delete-source`) removes the legacy `.vcf/` dir.
+  Idempotent; `--all` walks `workspace.allowed_roots` for every in-tree
+  marker.
+- **`vcf lessons reconcile` CLI (followup #42).** Drains project lessons
+  whose `mirror_status != 'mirrored'` into the global mirror DB.
+  Idempotent thanks to the new `uniq_global_lessons_identity` unique
+  index. Operators use this after a transient mirror outage.
+- **`feedback_add` + `feedback_list` MCP tools (followup #18).** One-line
+  "sigh, that was annoying" channel distinct from `lesson_log_add`. Note
+  + optional stage + optional urgency. Audit row per call; redacts
+  before persist.
+- **`vcf admin config-history` CLI + `config_boots` global-DB table
+  (followup #48).** Every `vcf-mcp` boot captures a sha256 + stat
+  snapshot of the resolved config file so an operator can spot a
+  post-hoc endpoint-config swap. Emits a one-line stderr note on boot
+  when the sha256 changed since the previous boot for the same path.
+- **`node:sqlite` ExperimentalWarning suppression (followup #7).** Shebang
+  on `dist/cli.js` / `dist/mcp.js` uses `env -S node
+  --disable-warning=ExperimentalWarning`. Will self-revert once
+  `node:sqlite` hits stability-2 and we bump the Node floor.
+- **Extended secret-redaction patterns (followup #47).** GitHub tokens
+  (`ghp_`, `gho_`, `ghs_`, `ghr_`, `ghu_`, `github_pat_`), Stripe
+  (`sk|rk|pk_live|test_`), Slack (`xox[a-z]-*`, `hooks.slack.com`
+  webhook URLs), and Google API keys (`AIza…`). All covered by
+  regression tests.
+
+### Changed
+
+- **Registry-based scope lookup canonicalizes through `realpathSync`
+  (followup #46).** Closes a latent UX defect on case-insensitive
+  filesystems (macOS APFS/HFS+ default, Windows NTFS default) and
+  symlinked checkouts — a cwd that realpaths to a registered `root_path`
+  now resolves to `project` scope regardless of case / symlink variance.
+- **`lesson_search` SQL pushdown (followup #40).** Stage + per-tag LIKE +
+  free-text query predicates now evaluate in SQL; the DB returns at most
+  `limit × 5` rows newest-first. Reinstates the "p95 < 100ms @ 10k rows"
+  claim, guarded by a new perf fixture
+  (`test/perf/lesson_search_10k.test.ts`).
+- **`review_execute.ts` split (followup #45).** Prompt composition +
+  submission parsing moved to `src/review/prompt.ts`; endpoint + model +
+  trust-level resolution moved to `src/review/endpointResolve.ts`.
+  `review_execute.ts` is now a 262-line orchestrator (was 484 lines).
+- **`cli.ts` god-module decomposition (followup #44).** 29 command
+  handlers split across 13 per-group modules under `src/cli/`. `cli.ts`
+  is now the commander bootstrap + top-level argv router only (2688 →
+  599 lines). `src/primers/merge.ts` owns the three-way-merge core that
+  backs both `vcf init` seeding and `vcf update-primers`. Test-import
+  surface (`mergePrimerTree`, `seedKbIfMissing`,
+  `resolveUpstreamKbRoot`) is re-exported from `src/cli.ts` for
+  backward-compat.
+
+### Schema
+
+- **Global DB v5: `config_boots` table** — forensic snapshot of config
+  path + ctime + mtime + sha256 + prev_sha256 + pid + vcf_version per
+  `vcf-mcp` boot.
+- **Project DB v6: `lessons.mirror_status` column** (`pending |
+  mirrored | failed`, default `mirrored`). Lets `vcf lessons reconcile`
+  find rows that still need to land in the global mirror.
+- **Project DB v7: `feedback` table** — id, note, optional stage,
+  optional urgency, created_at. Backs the new `feedback_add` /
+  `feedback_list` MCP tools.
+- **Global lessons v2: `uniq_global_lessons_identity` unique index** on
+  (project_root, title, created_at) — makes `vcf lessons reconcile`
+  safely idempotent via `INSERT OR IGNORE`.
+
+### Fixed
+
+- **Scope case-insensitivity on macOS/Windows** — see Changed #46.
+- **Lesson mirror drift is now observable + repairable** — writes that
+  fail flip the row's `mirror_status` to `failed`; operators run `vcf
+  lessons reconcile` to drain.
+- **Reviewer-endpoint gate now unit-tested at the module boundary** —
+  `test/review/endpointResolve.test.ts` pins the trust-level + defaults
+  + env-var behavior independent of the full MCP surface.
 
 ---
 
