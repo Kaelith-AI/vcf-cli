@@ -1,6 +1,6 @@
 # src/cli — CLI command handlers
 
-`cli.ts` is the Commander bootstrap and top-level argv router (≈600 lines after the v0.6.1 decomposition). The 29 command handlers are split across 13 per-group modules here.
+`cli.ts` is the Commander bootstrap and top-level argv router. Command handlers are split across 14 per-group modules here.
 
 ## Module map
 
@@ -17,7 +17,8 @@
 | `lifecycle.ts` | `vcf lifecycle-report` |
 | `backup.ts` | `vcf backup / vcf restore` |
 | `migrate.ts` | `vcf migrate 0.3` |
-| `lessons.ts` | `vcf lessons reconcile` |
+| `configUpgrade.ts` | `vcf config upgrade` |
+| `standards.ts` | `vcf standards init` |
 | `testTrends.ts` | `vcf test-trends` |
 | `_shared.ts` | Shared helpers (output formatting, error handling) |
 

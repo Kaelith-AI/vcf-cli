@@ -5,13 +5,13 @@ The **Vibe Coding Framework MCP** — an LLM-agnostic Model Context Protocol ser
 - **Server owns state, files, index, context prep.** Clients own conversation + execution.
 - **Token-economy first**: tools default to `{paths, summary}`; `expand=true` gets content.
 - **Two scopes**: global (idea / spec / project-init / catalog) and project (full lifecycle).
-- **42 MCP tools** across the full lifecycle, including cross-project admin tools (PM role).
+- **61 MCP tools** across the full lifecycle, including cross-project admin tools (PM role) and the unified research pipeline (PM-only).
 - **27-stage review subsystem** with carry-forward manifest, stage-entry rules, disposable workspaces, and per-model calibration overlays.
 - **Primer tag-matching** is deterministic (weighted Jaccard), with optional embedding-based blending.
 - **Configurable output paths**: all project-tree writes go through `config.outputs.*`; no hardcoded layout.
 - **No hardcoded paths, no ambient network, no auto-update.** Everything through `~/.vcf/config.yaml`.
 
-Current published version on npm: **0.3.2**. Source is at v0.6.2; a new publish is pending.
+Current version: **0.7.0**.
 
 ---
 
@@ -188,19 +188,19 @@ The CLI flags mirror the tool: `--mode structured|narrative`, `--format md|json|
 
 > _"/log-lesson"_
 
-`lesson_log_add` appends a structured lesson to the project lesson log. Required: `title`, `observation`. Optional: `context`, `actionable_takeaway`, `scope` (`project` \| `universal`; default from `config.lessons.default_scope`), `stage`, `tags`. Lesson text runs through the same redactor that gates outbound LLM traffic, so a pasted `sk-…` key or `.env`-shaped value lands in the DB as `[REDACTED:openai-key]` / `[REDACTED]` before any mirror write. Every call also writes exactly one audit row.
+`lesson_log_add` appends a structured lesson. Required: `title`, `observation`. Optional: `context`, `actionable_takeaway`, `scope` (`project` \| `universal`), `stage`, `tags`. Lesson text runs through the same redactor that gates outbound LLM traffic, so a pasted `sk-…` key or `.env`-shaped value lands in the DB as `[REDACTED:openai-key]` / `[REDACTED]`. Every call writes exactly one audit row.
 
-Each lesson is persisted twice: once in the project's state DB at `~/.vcf/projects/<slug>/project.db`, once mirrored into the cross-project global lessons DB at `config.lessons.global_db_path` (default `~/.vcf/lessons.db`). The project copy is authoritative; the mirror enables `lesson_search({ scope: "global" | "all" })` across every project that's opted in.
+Lessons go to a single global store at `config.lessons.global_db_path` (default `~/.vcf/lessons.db`), tagged with `project_root`. There is no per-project mirror table — the store is the authority. `global_db_path: null` disables it entirely (`E_SCOPE_DENIED` on every lesson/feedback tool).
 
-`lesson_search` accepts `query` (substring), `tags` (AND-filter), `stage`, `scope`, and `limit` (default 20, max 200). Ranking: `tag-hit-count × 2 + title-exact 10 / title-prefix 5 / title-contains 3 / body-contains 1`. `expand=true` attaches the observation + context bodies; the default envelope returns metadata only to keep the token cost low.
+`lesson_search` accepts `query` (substring), `tags` (AND-filter), `stage`, `filter` (`current` \| `universal` \| `all`), and `limit` (default 20, max 200). `current` scopes to the active project; `universal` returns rows marked `scope='universal'`; `all` returns the full store. Ranking: `tag-hit-count × 2 + title-exact 10 / title-prefix 5 / title-contains 3 / body-contains 1`. `expand=true` attaches observation + context bodies.
 
-> **Cross-project trust boundary.** The global lessons mirror is a **single-operator, single-workstation** convenience: any project-scope MCP session on this workstation can read every lesson written from every other project on the same workstation by passing `scope: "global"` or `scope: "all"`. That is the design intent — a vibe coder's universal lessons should be queryable from anywhere. It is **not** a multi-tenant boundary: if two projects on the same machine must not share lessons (e.g., one is under NDA), the operator must either (a) keep all `lesson_search` calls at the default `scope: "project"`, (b) avoid writing lessons from the sensitive project, or (c) set `config.lessons.global_db_path: null` in `~/.vcf/config.yaml` to disable the mirror entirely. A per-project opt-in/out knob is tracked as followup #41.
+> **Cross-project trust boundary.** The global store is a **single-operator, single-workstation** convenience. It is **not** a multi-tenant boundary: if two projects on the same machine must not share lessons (e.g., one is under NDA), set `config.lessons.global_db_path: null` to disable the store entirely, or scope all searches to `filter: "current"` and keep lesson writes limited to that project.
 
 ### 8. Ship
 
 > _"/ship-audit"_
 
-6 passes: **hardcoded-path** (blocker), **secrets** (blocker; uses gitleaks if installed), **test-data-residue** (blocker), **config-completeness** (blocker), **personal-data** (warning), **stale-security-TODOs** (warning). `fail_fast: true` halts at the first blocker.
+7 passes: **hardcoded-path** (blocker), **secrets** (blocker; uses gitleaks if installed), **test-data-residue** (blocker), **config-completeness** (blocker), **company-standards** (deterministic checks declared in `~/.vcf/kb/standards/company-standards.md`; skipped if the file is absent), **personal-data** (warning), **stale-security-TODOs** (warning). `fail_fast: true` halts at the first blocker.
 
 > _"/ship-build"_
 
@@ -221,8 +221,11 @@ vcf register-endpoint \      # append a new LLM endpoint to config.yaml
   --base-url https://api.openai.com/v1 \
   --trust-level public \
   --auth-env-var OPENAI_API_KEY
+vcf config upgrade           # add 0.7 fields (endpoint.kind, model_alias.vendor/tags, roles scaffold)
+                             #   to an existing config.yaml — idempotent, purely additive
 vcf stale-check              # flag KB entries past review.stale_primer_days
 vcf update-primers           # pull latest @kaelith-labs/kb (three-way merge)
+vcf standards init           # seed ~/.vcf/kb/standards/<kind>.md from shipped .example stubs
 vcf pack add --name <slug> --path <abs>   # register a third-party KB pack
 vcf pack list                # show registered packs
 vcf embed-kb                 # populate embeddings cache (optional)
@@ -232,7 +235,6 @@ vcf admin config-history     # forensic log of config file changes per boot
 vcf backup <subset>          # snapshot ~/.vcf/ subsets (projects|global|kb|all)
 vcf restore <archive>        # restore from a backup tarball (conflict-safe)
 vcf migrate 0.3              # automate 0.3.x → 0.5+ state-dir relocation
-vcf lessons reconcile        # drain pending lesson-mirror rows to global DB
 vcf test-trends              # cross-project test-run summary from global DB
 vcf project list             # list registered projects
 vcf project move             # copy/move a project directory (PM scope)
@@ -247,8 +249,7 @@ These are intentionally not MCP tools. Deterministic maintenance that a human or
 ### Configuring review defaults + provider options
 
 `~/.vcf/config.yaml` accepts two related blocks for routing endpoint-using
-tools (currently just `review_execute`; forward-compat for `lifecycle_report`
-/ `retrospective` / `research` when they ship):
+tools (`review_execute`, `lifecycle_report`, and the research pipeline tools):
 
 ```yaml
 # Per-endpoint knobs merged into the outbound request body as `options`.
@@ -304,6 +305,59 @@ silently reroute a sensitive review to a new backend.
 
 Importable n8n workflows for weekly stale-check, hourly endpoint-health, and weekly KB-update notifications live under [`packaging/n8n/`](packaging/n8n/). See its README for setup + cron equivalents if you're not on n8n.
 
+## 0.7 feature surface
+
+### Capability-aware role system
+
+`~/.vcf/config.yaml` gains three new fields at 0.7. All are optional — legacy configs continue to validate without them, and `vcf config upgrade` adds them automatically.
+
+```yaml
+endpoints:
+  - name: local-claude
+    kind: cli              # "api" (HTTP, default) or "cli" (local subprocess: claude/codex/gemini/ollama)
+    enabled: true          # set false to disable without removing the entry
+
+model_aliases:
+  - alias: frontier-gpt
+    model_id: gpt-5.4
+    endpoint: openai-main
+    vendor: openai         # inferred from model_id prefix by "vcf config upgrade"
+    tags: [frontier, code_review, long_context]
+                           # capability declarations; drives vendor-diversity enforcement on panels
+
+roles:
+  research_panel:          # role name → model_alias + capability requirements
+    model_alias: frontier-gpt
+    required_tags: [frontier]
+  kb_finalize:
+    model_alias: local-claude
+    required_tags: [local]
+
+searxng:                   # local SearXNG instance for search_web tool
+  base_url: http://127.0.0.1:8080
+  engines: [google, bing]  # optional engine override
+```
+
+Valid `tags`: `frontier`, `local`, `web_search`, `harness`, `code_review`, `long_context`, `vision`.
+
+### Unified research pipeline (PM-only tools)
+
+Five MCP tools, registered only when the project's role is `pm`:
+
+| Tool | What it does |
+|---|---|
+| `research_compose` | Fan out N aspects to a vendor-diverse panel of frontier models. `mode=execute` dispatches through the `research_panel` role; `mode=directive` returns a scaffold prompt for the orchestrator to fan out itself. |
+| `research_assemble` | Closes the gap between compose and verify. Two-step pattern: outline first (think the draft through end-to-end), then fill in the body. Includes a kind-aware exemplar pointer (primer→`primers/coding.md`, best-practice→`best-practices/coding.md`) so each draft mirrors a known-good shape. |
+| `research_verify` | Different-model cross-check; flags weakly-supported and hallucinated claims. Accepts upstream `phase=compose` or `phase=assemble`. |
+| `research_resolve` | Per-claim re-investigation against primary sources. `mode=execute` dispatches per-claim in parallel; `mode=directive` returns a scaffold prompt. |
+| `search_web` | Wraps a configured SearXNG instance for local-model web search. Registers only when `config.searxng` is set; no-op otherwise. Available under both scopes. |
+
+All multi-agent tools support `mode=execute` (server fans out) or `mode=directive` (server returns prompts and paths for the orchestrator to fan out, useful when the orchestrator's harness has its own web-search capability).
+
+### Provenance enforcement
+
+Every LLM-generated artifact (`draft.md`, `verify.json`, `resolutions.json`, `lifecycle-report.md`) carries a `provenance` block: `{ tool, phase, model, endpoint, generated_at }`. Downstream research tools (`research_assemble`, `research_verify`, `research_resolve`) refuse to operate on artifacts that lack a provenance block.
+
 ## Pins
 
 | Pin                        | Version                                           |
@@ -326,9 +380,9 @@ Importable n8n workflows for weekly stale-check, hourly endpoint-health, and wee
 ## Known gaps / future work
 
 - `ship_release` plan/confirm step — `gh release create` runs but the plan/confirm wrapper (`confirm_token`) has not landed as a formal tool flow.
-- Per-project `lessons.mirror_policy` override (currently global-only).
 - Codex CLI and Gemini CLI native-protocol adapters for `review_execute` (OpenAI-compatible shape covers Ollama / LiteLLM / OpenRouter today).
 - `vcf project scan` is obsolete since 0.5.0 and will be removed in a future release; use `vcf adopt <path>` instead.
+- Per-project `lessons` opt-out from the global store (`global_db_path: null` disables for the whole operator; per-project granularity is tracked as a followup).
 
 ## License
 
