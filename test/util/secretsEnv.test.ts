@@ -141,16 +141,13 @@ describe("loadSecretsEnv", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "reports permissive=false on chmod 600",
-    async () => {
-      await writeFile(envPath, "VCF_SECRETS_TEST_FOO=v\n");
-      await chmod(envPath, 0o600);
-      const r = loadSecretsEnv(envPath);
-      expect(r.permissive).toBe(false);
-      expect(r.mode).toBe("0600");
-    },
-  );
+  it.skipIf(process.platform === "win32")("reports permissive=false on chmod 600", async () => {
+    await writeFile(envPath, "VCF_SECRETS_TEST_FOO=v\n");
+    await chmod(envPath, 0o600);
+    const r = loadSecretsEnv(envPath);
+    expect(r.permissive).toBe(false);
+    expect(r.mode).toBe("0600");
+  });
 
   it("never logs or returns secret values, only names", async () => {
     await writeFile(envPath, "VCF_SECRETS_TEST_FOO=super-secret-value-do-not-leak\n");
