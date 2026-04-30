@@ -20,8 +20,7 @@ import { loadConfig, ConfigError } from "../config/loader.js";
  */
 export const vcfHomeDir = (): string => process.env["VCF_HOME"] ?? homedir();
 
-export const DEFAULT_CONFIG_PATH = (): string =>
-  resolvePath(homedir(), ".vcf", "config.yaml");
+export const DEFAULT_CONFIG_PATH = (): string => resolvePath(homedir(), ".vcf", "config.yaml");
 export const DEFAULT_KB_ROOT = (): string => resolvePath(homedir(), ".vcf", "kb");
 export const DEFAULT_KB_ANCESTOR_ROOT = (): string =>
   resolvePath(homedir(), ".vcf", "kb-ancestors");

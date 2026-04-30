@@ -111,7 +111,14 @@ describe("review_execute trust-level gate on defaults-resolved endpoints", () =>
       projectSlug: "test-project",
       projectDbPath: join(projectDir, ".vcf", "project.db"),
     };
-    const server = createServer({ scope: "project", resolved, config, globalDb, projectDb, homeDir: home });
+    const server = createServer({
+      scope: "project",
+      resolved,
+      config,
+      globalDb,
+      projectDb,
+      homeDir: home,
+    });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
     const client = new Client({ name: "t", version: "0" }, { capabilities: {} });

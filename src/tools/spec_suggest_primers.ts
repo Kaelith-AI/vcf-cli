@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { writeAudit } from "../util/audit.js";
+import { assertApiEndpoint } from "../util/endpointKind.js";
 import { McpError } from "../errors.js";
 import { loadKbCached } from "../primers/load.js";
 import { matchPrimers, type MatchResult } from "../primers/match.js";
@@ -132,10 +133,7 @@ export function registerSpecSuggestPrimers(server: McpServer, deps: ServerDeps):
                     suggestions: results,
                   },
                 }
-              : {
-                  expand_hint:
-                    "Call spec_suggest_primers with expand=true to receive the ranked list.",
-                },
+              : {},
           );
           return payload;
         },
@@ -178,8 +176,9 @@ async function tryBlend(
   const cache = await loadEmbeddingCache(cacheDir, cfg.model);
   if (cache.byId.size === 0) return null; // nothing precomputed
 
-  const endpoint = deps.config.endpoints.find((e) => e.name === cfg.endpoint);
-  if (!endpoint) return null;
+  const endpointRaw = deps.config.endpoints.find((e) => e.name === cfg.endpoint);
+  if (!endpointRaw || !endpointRaw.enabled || endpointRaw.kind !== "api") return null;
+  const endpoint = assertApiEndpoint(endpointRaw);
   let apiKey: string | undefined;
   if (endpoint.auth_env_var) {
     apiKey = process.env[endpoint.auth_env_var];

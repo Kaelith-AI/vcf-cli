@@ -17,7 +17,12 @@ function config(overrides: Record<string, unknown> = {}) {
       specs_dir: `${ROOT}/specs`,
     },
     endpoints: [
-      { name: "local", provider: "openai-compatible", base_url: "http://127.0.0.1:11434/v1", trust_level: "local" },
+      {
+        name: "local",
+        provider: "openai-compatible",
+        base_url: "http://127.0.0.1:11434/v1",
+        trust_level: "local",
+      },
     ],
     kb: { root: `${ROOT}/kb` },
     ...overrides,
@@ -43,8 +48,8 @@ describe("resolveOutputs", () => {
       ROOT,
       config({
         outputs: {
-          reviews_dir: "reviews",          // relative
-          decisions_dir: "/shared/adrs",    // absolute — escapes projectRoot
+          reviews_dir: "reviews", // relative
+          decisions_dir: "/shared/adrs", // absolute — escapes projectRoot
           lifecycle_report_dir: "reports",
         },
       }),

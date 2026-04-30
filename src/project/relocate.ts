@@ -39,16 +39,11 @@ export class RelocateProjectError extends Error {
   }
 }
 
-export async function relocateProject(
-  input: RelocateProjectInput,
-): Promise<RelocateProjectResult> {
+export async function relocateProject(input: RelocateProjectInput): Promise<RelocateProjectResult> {
   const { slug, globalDb } = input;
   const row = getProjectByName(globalDb, slug);
   if (!row) {
-    throw new RelocateProjectError(
-      "E_NOT_FOUND",
-      `no registered project with slug '${slug}'`,
-    );
+    throw new RelocateProjectError("E_NOT_FOUND", `no registered project with slug '${slug}'`);
   }
   const oldPath = resolvePath(row.root_path);
   const newPath = resolvePath(input.newPath);

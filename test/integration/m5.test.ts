@@ -249,12 +249,17 @@ describe("M5 plan / build / logs (project scope)", () => {
     expect(c.suggested_primers.some((s) => s.id === "primers/mcp")).toBe(true);
   });
 
-  it("plan_save writes three files and advances state to planning", async () => {
+  it("plan_save writes four files and advances state to planning", async () => {
     const { client, projectDb } = await bootProjectScope();
     const res = await client.callTool({
       name: "plan_save",
       arguments: {
         name: "demo",
+        charter:
+          "# Charter\n\nProblem: we need a thing. Success: it works. Constraints: none. Out of scope: nothing. Locked: TypeScript.".padEnd(
+            120,
+            " ",
+          ),
         plan: "# Plan\n\nSome phases.".padEnd(120, " "),
         todo: "- [ ] item 1\n- [ ] item 2",
         manifest: "- src/main.ts — entry point",
@@ -265,13 +270,16 @@ describe("M5 plan / build / logs (project scope)", () => {
     const env = parseResult(res);
     expect(env.ok).toBe(true);
     const out = env.content as { written: string[]; state: string };
-    expect(out.written.length).toBe(3);
+    expect(out.written.length).toBe(4);
     expect(out.state).toBe("planning");
     // Verify on disk
-    for (const suffix of ["plan", "todo", "manifest"]) {
+    for (const suffix of ["charter", "plan", "todo", "manifest"]) {
       const p = join(projectDir, "plans", `demo-${suffix}.md`);
       expect(await readFile(p, "utf8")).toMatch(/./);
     }
+    // Summary should contain the compact directive
+    expect(env.summary).toContain("COMPACT NOW");
+    expect(env.summary).toContain("demo");
     // DB state
     const state = (
       projectDb.prepare("SELECT state FROM project WHERE id=1").get() as { state: string }
@@ -283,6 +291,10 @@ describe("M5 plan / build / logs (project scope)", () => {
     const { client } = await bootProjectScope();
     const args = {
       name: "demo",
+      charter: "# Charter\n\nProblem, success, constraints, out-of-scope, decisions.".padEnd(
+        80,
+        " ",
+      ),
       plan: "# Plan A".padEnd(120, " "),
       todo: "- [ ] first task",
       manifest: "- src/main.ts — entry",
@@ -306,6 +318,10 @@ describe("M5 plan / build / logs (project scope)", () => {
       name: "plan_save",
       arguments: {
         name: "demo",
+        charter: "# Charter\n\nProblem, success, constraints, out-of-scope, decisions.".padEnd(
+          80,
+          " ",
+        ),
         plan: "# P".padEnd(120, " "),
         todo: "- [ ] first task",
         manifest: "- src/main.ts entry",
@@ -316,15 +332,22 @@ describe("M5 plan / build / logs (project scope)", () => {
     );
     expect(env.ok).toBe(true);
     const bodies = env.content as Record<string, string>;
-    expect(Object.keys(bodies).sort()).toEqual(["manifest_md", "plan_md", "todo_md"]);
+    // plan_get returns plan_md, todo_md, manifest_md (pre-G-A shape; charter not in plan_get yet)
+    expect(bodies["plan_md"]).toBeDefined();
+    expect(bodies["todo_md"]).toBeDefined();
+    expect(bodies["manifest_md"]).toBeDefined();
   });
 
-  it("build_context loads builder.md + vibe-BP + type-BP + plan bodies", async () => {
+  it("build_context loads builder.md + vibe-BP + type-BP + plan bodies + charter", async () => {
     const { client } = await bootProjectScope();
     await client.callTool({
       name: "plan_save",
       arguments: {
         name: "demo",
+        charter: "# Charter\n\nProblem, success, constraints, out-of-scope, decisions.".padEnd(
+          80,
+          " ",
+        ),
         plan: "# Plan".padEnd(120, " "),
         todo: "- [ ] first task",
         manifest: "- src/main.ts entry",
@@ -341,15 +364,19 @@ describe("M5 plan / build / logs (project scope)", () => {
       builder_md: string;
       vibe_best_practice_md: string | null;
       type_best_practice_md: string | null;
+      charter: string | null;
       plan: Record<string, string | null>;
     };
     expect(c.builder_md).toMatch(/Builder Role/);
     expect(c.vibe_best_practice_md).toMatch(/Vibe coding/);
     expect(c.type_best_practice_md).toMatch(/Backend BP/);
     expect(c.plan["plan"]).toMatch(/# Plan/);
+    // Charter is returned separately and also in plan map
+    expect(c.charter).toMatch(/Charter/);
+    expect(c.plan["charter"]).toMatch(/Charter/);
   });
 
-  it("build_swap returns a compaction hint and the target best-practice body", async () => {
+  it("build_swap returns a context hint and the target best-practice body", async () => {
     const { client } = await bootProjectScope();
     const env = parseResult(
       await client.callTool({
@@ -364,7 +391,8 @@ describe("M5 plan / build / logs (project scope)", () => {
     );
     expect(env.ok).toBe(true);
     const c = env.content as { compaction_hint: string; best_practice_md: string | null };
-    expect(c.compaction_hint).toMatch(/Compact/);
+    // build_swap now provides a context-restoration hint (compact advisory moved to plan_save)
+    expect(c.compaction_hint).toMatch(/frontend/i);
     expect(c.best_practice_md).toMatch(/Frontend BP/);
   });
 

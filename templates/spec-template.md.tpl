@@ -127,4 +127,4 @@ _TBD_
 
 ## 14. Raw Notes / Brain Dump
 
-_Use this section to preserve verbatim context from the capture conversation that doesn't fit above. A good PM spec can be reconstructed from the notes alone if the sections above are lost._
+{{RAW_NOTES_SEED}}

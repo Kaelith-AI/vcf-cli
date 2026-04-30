@@ -111,7 +111,9 @@ export function registerReviewTypeApply(server: McpServer, deps: ServerDeps): vo
             ? `'${parsed.name}' is already in config.review.categories — no further action needed.`
             : `Add '${parsed.name}' to config.review.categories in ~/.vcf/config.yaml to activate the new review type. Until then, review_prepare rejects type='${parsed.name}' with E_VALIDATION.`;
 
-          const summary = `review_type_apply: wrote ${parsed.stages.length} stage file(s) + overlay for '${parsed.name}' (${writtenPaths.length} files total)`;
+          const summary = alreadyRegistered
+            ? `review_type_apply: wrote ${parsed.stages.length} stage file(s) + overlay for '${parsed.name}' (${writtenPaths.length} files total). Type is already in config.review.categories — active.`
+            : `review_type_apply: wrote ${parsed.stages.length} stage file(s) + overlay for '${parsed.name}' (${writtenPaths.length} files total). Type '${parsed.name}' registered. Add it to config.review.categories to activate it in review runs.`;
 
           return success(writtenPaths, summary, {
             ...(parsed.expand
@@ -125,9 +127,7 @@ export function registerReviewTypeApply(server: McpServer, deps: ServerDeps): vo
                     operator_instructions: operatorInstructions,
                   },
                 }
-              : {
-                  expand_hint: "Pass expand=true for the written-paths list + operator instructions.",
-                }),
+              : {}),
           });
         },
         (payload) => {

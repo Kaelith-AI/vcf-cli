@@ -1,10 +1,11 @@
 // build_swap — project scope.
 //
-// Emit a compaction hint and return the best-practice doc for a new builder
-// type. Used at the "finish backend → swap to frontend" boundaries the plan
-// names. The server doesn't actually compact the client's context (it
-// can't); it returns a structured instruction the client's skill layer can
-// act on (stop session, load the new best-practice, resume).
+// Return a context-handoff payload for resuming mid-build in a fresh session.
+// Used at the "finish backend → swap to frontend" boundaries the plan names.
+// Call this at the START of a new build session (after compacting) to restore
+// full context including the target builder type's best-practice doc. The
+// compact advisory lives in plan_save (end of planning stage) — build_swap
+// is for mid-build context restoration only.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -36,7 +37,7 @@ export function registerBuildSwap(server: McpServer, deps: ServerDeps): void {
     {
       title: "Build-Type Swap",
       description:
-        "Return a compaction hint + the target builder type's best-practice doc. Client skill should stop the current session, compact, and resume with the returned doc loaded.",
+        "Return a context-handoff payload for resuming mid-build in a fresh session after compacting. Call at the START of a new build session to restore full context: plan/manifest re-read instructions + the target builder type's best-practice doc.",
       inputSchema: BuildSwapInput.shape,
     },
     async (args: z.infer<typeof BuildSwapInput>) => {
@@ -53,8 +54,8 @@ export function registerBuildSwap(server: McpServer, deps: ServerDeps): void {
           const bpBody = bp ? await readFile(bp.path, "utf8") : null;
 
           const hint = [
-            `Compact the current session before resuming.`,
-            `New builder type: ${parsed.to_type}. Re-read plans/${parsed.plan_name}-plan.md and`,
+            `New builder type: ${parsed.to_type}.`,
+            `Re-read plans/${parsed.plan_name}-plan.md, plans/${parsed.plan_name}-charter.md, and`,
             `plans/${parsed.plan_name}-manifest.md, then proceed with the best-practice doc below.`,
           ].join(" ");
 
@@ -72,10 +73,7 @@ export function registerBuildSwap(server: McpServer, deps: ServerDeps): void {
                     best_practice_md: bpBody,
                   },
                 }
-              : {
-                  expand_hint:
-                    "Call build_swap with expand=true to receive the hint + best-practice body.",
-                },
+              : {},
           );
           return payload;
         },

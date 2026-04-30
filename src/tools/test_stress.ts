@@ -23,8 +23,10 @@ import { z } from "zod";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { writeAudit } from "../util/audit.js";
+import { assertApiEndpoint } from "../util/endpointKind.js";
 import { McpError } from "../errors.js";
-import { callChatCompletion, LlmError } from "../util/llmClient.js";
+import { callChatCompletionWithFallback, LlmError } from "../util/llmClient.js";
+import { buildBackupRequest, resolveAuthKey } from "../review/endpointResolve.js";
 
 const StressShape = z.enum(["valid-fuzz", "invalid-fuzz", "boundary", "unicode", "path-traversal"]);
 
@@ -92,33 +94,52 @@ export function registerTestStress(server: McpServer, deps: ServerDeps): void {
                 "test_stress mode=endpoint requires model_id arg or config.defaults.stress_test.model",
               );
             }
-            const endpoint = deps.config.endpoints.find((e) => e.name === endpointName);
-            if (!endpoint) {
+            const endpointRaw = deps.config.endpoints.find((e) => e.name === endpointName);
+            if (!endpointRaw) {
               throw new McpError(
                 "E_VALIDATION",
                 `endpoint '${endpointName}' not found in config.endpoints`,
               );
             }
-            const apiKey = endpoint.auth_env_var
-              ? process.env[endpoint.auth_env_var]
-              : undefined;
+            if (!endpointRaw.enabled) {
+              throw new McpError(
+                "E_ENDPOINT_DISABLED",
+                `endpoint '${endpointRaw.name}' is disabled (set enabled=true in config.endpoints)`,
+              );
+            }
+            const endpoint = assertApiEndpoint(endpointRaw);
+            const { apiKey, envVarName, source } = resolveAuthKey(
+              endpoint,
+              deps.config.defaults?.stress_test?.key,
+            );
+            if (!apiKey && envVarName && endpoint.trust_level !== "local") {
+              throw new McpError(
+                "E_CONFIG_MISSING_ENV",
+                `env var ${envVarName} is unset (referenced via ${source === "feature" ? "defaults.stress_test.key" : `endpoints[${endpoint.name}].auth_env_var`}); endpoint '${endpoint.name}' needs it`,
+              );
+            }
             const ac = new AbortController();
             const timer = setTimeout(() => ac.abort(), parsed.timeout_ms);
             try {
-              const generated = await callChatCompletion({
+              const primaryReq = {
                 baseUrl: endpoint.base_url,
                 apiKey,
                 model: modelId,
                 messages: [
-                  { role: "system", content: buildSystemPrompt(parsed) },
-                  { role: "user", content: buildUserPrompt(parsed) },
+                  { role: "system" as const, content: buildSystemPrompt(parsed) },
+                  { role: "user" as const, content: buildUserPrompt(parsed) },
                 ],
                 temperature: 0.3,
                 signal: ac.signal,
-              });
+              };
+              const backupReq = buildBackupRequest(deps.config, "stress_test", primaryReq);
+              const { content: llmOutput } = await callChatCompletionWithFallback(
+                primaryReq,
+                backupReq,
+              );
               content.endpoint = endpointName;
               content.model_id = modelId;
-              content.generated = generated;
+              content.generated = llmOutput;
             } catch (e: unknown) {
               if (e instanceof LlmError) throw new McpError("E_INTERNAL", `LLM: ${e.message}`);
               throw new McpError("E_INTERNAL", e instanceof Error ? e.message : String(e));
@@ -133,9 +154,7 @@ export function registerTestStress(server: McpServer, deps: ServerDeps): void {
               : `test_stress: generated ${parsed.count} input(s) via ${String(content.endpoint)}/${String(content.model_id)}`;
 
           return success([], summary, {
-            ...(parsed.expand
-              ? { content }
-              : { expand_hint: "Pass expand=true for the scaffolding prompt or generated payload." }),
+            ...(parsed.expand ? { content } : {}),
           });
         },
         (payload) => {
@@ -227,6 +246,28 @@ function buildPrompt(parsed: TestStressArgs): string {
     `- A passing run across ${parsed.count} inputs means this shape is`,
     `  currently well-covered. It does NOT mean other shapes are covered`,
     `  — run \`test_stress\` for each relevant shape.`,
+    ``,
+    `## Provenance`,
+    ``,
+    `If you persist the harness inputs OR the failure-cluster report to a`,
+    `file (recommended for reproducibility), include a provenance block at`,
+    `the top:`,
+    ``,
+    `\`\`\`yaml`,
+    `provenance:`,
+    `  tool: test_stress`,
+    `  phase: test-stress-llm-driven`,
+    `  model: <exact model id of the input-generating subagent>`,
+    `  endpoint: claude-code-subagent`,
+    `  generated_at: <ISO 8601>`,
+    `  shape: ${parsed.shape}`,
+    `  subject: ${parsed.subject}`,
+    `\`\`\``,
+    ``,
+    `Different models generate different fuzz distributions — when a stress`,
+    `pass surfaces a regression months from now, the operator wants to know`,
+    `which model authored the inputs that found it (so they can repeat with`,
+    `the same model for repro, or pick a different one for diversity).`,
   ].join("\n");
 }
 

@@ -74,7 +74,8 @@ describe("lesson_log_add / lesson_search (global-only, #41)", () => {
       ],
       kb: { root: kbRoot },
       lessons: {
-        global_db_path: overrides.global_db_path === undefined ? lessonsDbPath : overrides.global_db_path,
+        global_db_path:
+          overrides.global_db_path === undefined ? lessonsDbPath : overrides.global_db_path,
       },
     });
   }
@@ -259,9 +260,9 @@ describe("lesson_log_add / lesson_search (global-only, #41)", () => {
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA foreign_keys = ON");
     runMigrations(db, PROJECT_MIGRATIONS);
-    const v8 = db
-      .prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version=8")
-      .get() as { n: number };
+    const v8 = db.prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version=8").get() as {
+      n: number;
+    };
     expect(v8.n).toBe(1);
     const lessonsT = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='lessons'")

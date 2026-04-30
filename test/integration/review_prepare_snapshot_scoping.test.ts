@@ -101,7 +101,14 @@ describe("review_prepare snapshot scoping (decisions + response log)", () => {
       projectSlug: "test-project",
       projectDbPath: join(projectDir, ".vcf", "project.db"),
     };
-    const server = createServer({ scope: "project", resolved, config, globalDb, projectDb, homeDir: home });
+    const server = createServer({
+      scope: "project",
+      resolved,
+      config,
+      globalDb,
+      projectDb,
+      homeDir: home,
+    });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
     const client = new Client({ name: "t", version: "0" }, { capabilities: {} });
@@ -117,19 +124,13 @@ describe("review_prepare snapshot scoping (decisions + response log)", () => {
     // suite — here we're exercising the snapshot filter.
     const now = Date.now();
     projectDb
-      .prepare(
-        "INSERT INTO decisions (slug, created_at, path, review_type) VALUES (?, ?, ?, ?)",
-      )
+      .prepare("INSERT INTO decisions (slug, created_at, path, review_type) VALUES (?, ?, ?, ?)")
       .run("use-zod-v4", now - 3000, "plans/decisions/universal.md", null);
     projectDb
-      .prepare(
-        "INSERT INTO decisions (slug, created_at, path, review_type) VALUES (?, ?, ?, ?)",
-      )
+      .prepare("INSERT INTO decisions (slug, created_at, path, review_type) VALUES (?, ?, ?, ?)")
       .run("wrap-sqlite-writes", now - 2000, "plans/decisions/code.md", "code");
     projectDb
-      .prepare(
-        "INSERT INTO decisions (slug, created_at, path, review_type) VALUES (?, ?, ?, ?)",
-      )
+      .prepare("INSERT INTO decisions (slug, created_at, path, review_type) VALUES (?, ?, ?, ?)")
       .run("redaction-two-point-rule", now - 1000, "plans/decisions/security.md", "security");
 
     const env = parseResult(
@@ -176,7 +177,13 @@ describe("review_prepare snapshot scoping (decisions + response log)", () => {
            (run_id, finding_ref, builder_claim, response_text, references_json, created_at)
          VALUES (?, ?, ?, ?, '[]', ?)`,
       )
-      .run("code-4-seed", "code:stage-4:find-1", "agree", "fixed the POSIX-only split.", now - 2500);
+      .run(
+        "code-4-seed",
+        "code:stage-4:find-1",
+        "agree",
+        "fixed the POSIX-only split.",
+        now - 2500,
+      );
     projectDb
       .prepare(
         `INSERT INTO response_log
@@ -210,8 +217,7 @@ describe("review_prepare snapshot scoping (decisions + response log)", () => {
   it("scoped-diff excludes plans/reviews and lifecycle-report by default", async () => {
     const { client } = await connect();
     // Init a git repo with a real code change and a review-output change.
-    const git = (args: string[]) =>
-      spawnSync("git", args, { cwd: projectDir, encoding: "utf8" });
+    const git = (args: string[]) => spawnSync("git", args, { cwd: projectDir, encoding: "utf8" });
     git(["init", "-q", "-b", "main"]);
     git(["config", "user.email", "t@e"]);
     git(["config", "user.name", "t"]);

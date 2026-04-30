@@ -32,6 +32,7 @@ import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
+import { companyStandardsPass } from "./ship_audit_standards.js";
 
 const ShipAuditInput = z
   .object({
@@ -117,10 +118,13 @@ export function registerShipAudit(server: McpServer, deps: ServerDeps): void {
     {
       title: "Ship Audit",
       description:
-        "Pre-release gate. Runs hardcoded-path, secrets, test-data-residue, personal-data, config-completeness, and stale-security-TODO passes. Returns structured findings; blocker anywhere halts progression.",
+        "Pre-release gate. Runs hardcoded-path, secrets, test-data-residue, personal-data, config-completeness, stale-security-TODO, and company-standards passes. Returns structured findings; blocker anywhere halts progression.",
       inputSchema: ShipAuditInput.shape,
     },
     async (args: z.infer<typeof ShipAuditInput>) => {
+      // Captured during body so the audit result_code reflects actual findings,
+      // not just whether the tool itself ran (envelope always returns ok:true).
+      let auditResultCode = "ok";
       return runTool(
         async () => {
           if (!deps.projectDb) {
@@ -143,33 +147,47 @@ export function registerShipAudit(server: McpServer, deps: ServerDeps): void {
             return result.status === "blocker" && parsed.fail_fast;
           };
 
+          const buildEnvelope = (): ReturnType<typeof success> => {
+            const { payload, auditResultCode: code } = envelope(passes, parsed, root, deps);
+            auditResultCode = code;
+            return payload;
+          };
+
           if (shouldRun("hardcoded-path")) {
             const pass = await hardcodedPathPass(files, deps.config.workspace.allowed_roots);
-            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+            if (addPass(pass)) return buildEnvelope();
           }
           if (shouldRun("secrets")) {
             const pass = await secretsPass(files, root);
-            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+            if (addPass(pass)) return buildEnvelope();
           }
           if (shouldRun("test-data-residue")) {
             const pass = await testDataResiduePass(files);
-            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+            if (addPass(pass)) return buildEnvelope();
           }
           if (shouldRun("personal-data")) {
             const allowList = deps.config.audit.personal_data?.allow_list ?? [];
             const pass = await personalDataPass(files, allowList);
-            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+            if (addPass(pass)) return buildEnvelope();
           }
           if (shouldRun("config-completeness")) {
             const pass = configCompletenessPass(deps);
-            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+            if (addPass(pass)) return buildEnvelope();
           }
           if (shouldRun("stale-security-todos")) {
             const pass = await staleSecurityTodoPass(files);
-            if (addPass(pass)) return envelope(passes, parsed, root, deps);
+            if (addPass(pass)) return buildEnvelope();
+          }
+          if (shouldRun("company-standards")) {
+            const pass = await companyStandardsPass({
+              kbRoot: deps.config.kb.root,
+              projectRoot: root,
+              sourceFiles: files,
+            });
+            if (addPass(pass)) return buildEnvelope();
           }
 
-          return envelope(passes, parsed, root, deps);
+          return buildEnvelope();
         },
         (payload) => {
           writeAudit(deps.globalDb, {
@@ -178,7 +196,7 @@ export function registerShipAudit(server: McpServer, deps: ServerDeps): void {
             project_root: readProjectRoot(deps),
             inputs: args,
             outputs: payload,
-            result_code: payload.ok ? "ok" : payload.code,
+            result_code: payload.ok ? auditResultCode : payload.code,
           });
         },
       );
@@ -440,10 +458,7 @@ async function collectFiles(root: string): Promise<string[]> {
       } else if (st.isFile()) {
         const dot = full.lastIndexOf(".");
         const ext = dot >= 0 ? full.slice(dot) : "";
-        if (
-          SCAN_EXT.has(ext) ||
-          SCAN_BASENAME_PREFIXES.some((p) => name.startsWith(p))
-        ) {
+        if (SCAN_EXT.has(ext) || SCAN_BASENAME_PREFIXES.some((p) => name.startsWith(p))) {
           out.push(full);
         }
       }
@@ -468,7 +483,7 @@ function envelope(
   parsed: z.infer<typeof ShipAuditInput>,
   root: string,
   _deps: ServerDeps,
-): ReturnType<typeof success> {
+): { payload: ReturnType<typeof success>; auditResultCode: string } {
   const anyBlocker = passes.some((p) => p.status === "blocker");
   const anyWarning = passes.some((p) => p.status === "warning");
   const summary =
@@ -490,13 +505,12 @@ function envelope(
   const payload = success(
     paths,
     summary,
-    parsed.expand
-      ? { content: { passes, blocker: anyBlocker } }
-      : {
-          expand_hint: "Call ship_audit with expand=true for the full passes array.",
-        },
+    parsed.expand ? { content: { passes, blocker: anyBlocker } } : {},
   );
-  return payload;
+  // result_code reflects the actual audit outcome, not just whether the tool
+  // itself ran successfully. Blockers → "fail"; warnings → "warn"; clean → "ok".
+  const auditResultCode = anyBlocker ? "fail" : anyWarning ? "warn" : "ok";
+  return { payload, auditResultCode };
 }
 
 function readProjectRoot(deps: ServerDeps): string | null {

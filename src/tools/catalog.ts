@@ -77,9 +77,7 @@ export function registerConfigGet(server: McpServer, deps: ServerDeps): void {
           const payload = success(
             [],
             `config_get(${parsed.section}): ${Object.keys(out).length} section(s).`,
-            parsed.expand
-              ? { content: out }
-              : { expand_hint: "Call config_get with expand=true for the section data." },
+            parsed.expand ? { content: out } : {},
           );
           return payload;
         },
@@ -124,7 +122,11 @@ export function registerEndpointList(server: McpServer, deps: ServerDeps): void 
             .map((e) => ({
               name: e.name,
               provider: e.provider,
-              base_url: e.base_url,
+              kind: e.kind,
+              enabled: e.enabled,
+              ...(e.kind === "api" && e.base_url !== undefined ? { base_url: e.base_url } : {}),
+              ...(e.kind === "cli" && e.cmd !== undefined ? { cmd: e.cmd } : {}),
+              ...(e.kind === "cli" ? { workdir_mode: e.workdir_mode } : {}),
               ...(e.auth_env_var !== undefined ? { auth_env_var: e.auth_env_var } : {}),
               trust_level: e.trust_level,
             }));
@@ -133,9 +135,7 @@ export function registerEndpointList(server: McpServer, deps: ServerDeps): void 
             `endpoint_list: ${endpoints.length} endpoint(s)${
               parsed.trust_level ? ` filtered by trust_level=${parsed.trust_level}` : ""
             }.`,
-            parsed.expand
-              ? { content: { endpoints } }
-              : { expand_hint: "Call endpoint_list with expand=true for the full array." },
+            parsed.expand ? { content: { endpoints } } : {},
           );
           return payload;
         },
@@ -171,7 +171,7 @@ export function registerModelList(server: McpServer, deps: ServerDeps): void {
     {
       title: "List Model Aliases",
       description:
-        "List configured model aliases (alias, endpoint, model_id, prefer_for). Optional prefer_for filter.",
+        "List configured model aliases (alias, endpoint, model_id, prefer_for, vendor, tags). Optional prefer_for filter. Includes role bindings (which roles point at each alias).",
       inputSchema: ModelListInput.shape,
     },
     async (args: z.infer<typeof ModelListInput>) => {
@@ -181,14 +181,29 @@ export function registerModelList(server: McpServer, deps: ServerDeps): void {
           const aliases = deps.config.model_aliases.filter(
             (a) => parsed.prefer_for === undefined || a.prefer_for.includes(parsed.prefer_for),
           );
+          // Build a reverse index: model alias name -> [role names that
+          // point at it]. Surfaced so operators can see which roles depend
+          // on a given model when planning a swap.
+          const roleBindings: Record<string, string[]> = {};
+          for (const [roleName, role] of Object.entries(deps.config.roles)) {
+            const slots = role.default !== undefined ? [role.default] : (role.defaults ?? []);
+            for (const s of slots) {
+              if (!roleBindings[s]) roleBindings[s] = [];
+              roleBindings[s].push(roleName);
+            }
+          }
+          const annotated = aliases.map((a) => ({
+            ...a,
+            ...(roleBindings[a.alias] ? { role_bindings: roleBindings[a.alias] } : {}),
+          }));
           const payload = success(
             [],
             `model_list: ${aliases.length} alias(es)${
               parsed.prefer_for ? ` for prefer_for=${parsed.prefer_for}` : ""
             }.`,
             parsed.expand
-              ? { content: { model_aliases: aliases } }
-              : { expand_hint: "Call model_list with expand=true for the full array." },
+              ? { content: { model_aliases: annotated, roles: deps.config.roles } }
+              : {},
           );
           return payload;
         },
@@ -258,9 +273,7 @@ export function registerPrimerList(server: McpServer, deps: ServerDeps): void {
           const payload = success(
             rows.map((r) => r.path),
             `primer_list: ${rows.length} / ${all.length} KB entr(y|ies).`,
-            parsed.expand
-              ? { content: { entries: rows } }
-              : { expand_hint: "Call primer_list with expand=true for the full array." },
+            parsed.expand ? { content: { entries: rows } } : {},
           );
           return payload;
         },
@@ -310,9 +323,7 @@ export function registerPackList(server: McpServer, deps: ServerDeps): void {
           const payload = success(
             rows.map((r) => r.root),
             `pack_list: ${rows.length} pack(s) registered, ${rows.reduce((n, r) => n + r.entry_count, 0)} entr(y|ies) total.`,
-            parsed.expand
-              ? { content: { packs: rows } }
-              : { expand_hint: "Call pack_list with expand=true for the full array." },
+            parsed.expand ? { content: { packs: rows } } : {},
           );
           return payload;
         },

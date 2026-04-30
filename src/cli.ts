@@ -32,6 +32,7 @@ import {
 } from "./cli/project.js";
 import { runLifecycleReport } from "./cli/lifecycle.js";
 import { runInstallSkills, runUpdatePrimers } from "./cli/skills.js";
+import { runStandardsInit } from "./cli/standards.js";
 import { runEmbedKb } from "./cli/embed.js";
 import { runAdminAudit, runAdminConfigHistory } from "./cli/admin.js";
 import { runBackup, runRestore } from "./cli/backup.js";
@@ -110,9 +111,7 @@ program
 
 program
   .command("health")
-  .description(
-    "Ping each configured endpoint and report reachability. Exits 9 if any unreachable.",
-  )
+  .description("Ping each configured endpoint and report reachability. Exits 9 if any unreachable.")
   .option("--format <fmt>", "text (default) | json", "text")
   .option("--timeout-ms <ms>", "per-endpoint HTTP timeout", (v) => parseInt(v, 10), 5000)
   .action(async (opts: { format?: string; timeoutMs?: number }) => {
@@ -274,7 +273,11 @@ project
   )
   .argument("<slug>", "registered project slug")
   .argument("<new-path>", "absolute path to copy/move the project to")
-  .option("--move", "delete the source directory after copy+DB updates succeed (default: copy)", false)
+  .option(
+    "--move",
+    "delete the source directory after copy+DB updates succeed (default: copy)",
+    false,
+  )
   .option("--force", "overwrite non-empty target", false)
   .action(async (slug: string, newPath: string, opts: { move: boolean; force: boolean }) => {
     try {
@@ -412,6 +415,23 @@ program
     }
   });
 
+const standards = program
+  .command("standards")
+  .description("Manage the per-user company-standards overlay under ~/.vcf/kb/standards/.");
+standards
+  .command("init")
+  .description(
+    "Seed ~/.vcf/kb/standards/<kind>.md from the shipped .example stubs. Idempotent — existing files are left alone. With no args, seeds all four (company-standards, design-system, brand, privacy).",
+  )
+  .argument("[kinds...]", "subset to seed: company-standards | design-system | brand | privacy")
+  .action(async (kinds: string[]) => {
+    try {
+      await runStandardsInit({ kinds });
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
 program
   .command("embed-kb")
   .description(
@@ -465,15 +485,13 @@ admin
   .option("--path <path>", "filter to a specific config path")
   .option("--limit <n>", "cap rows returned (default 50, max 500)", (v) => parseInt(v, 10))
   .option("--format <fmt>", "table | json", "table")
-  .action(
-    async (opts: { path?: string; limit?: number; format: string }) => {
-      try {
-        await runAdminConfigHistory(opts);
-      } catch (e) {
-        err((e as Error).message);
-      }
-    },
-  );
+  .action(async (opts: { path?: string; limit?: number; format: string }) => {
+    try {
+      await runAdminConfigHistory(opts);
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
 
 program
   .command("backup")
@@ -487,15 +505,13 @@ program
     "all",
   )
   .option("--format <fmt>", "table | json", "table")
-  .action(
-    async (opts: { out?: string; include: string; format: string }) => {
-      try {
-        await runBackup(opts);
-      } catch (e) {
-        err((e as Error).message);
-      }
-    },
-  );
+  .action(async (opts: { out?: string; include: string; format: string }) => {
+    try {
+      await runBackup(opts);
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
 
 program
   .command("restore")
@@ -507,10 +523,7 @@ program
   .option("--replace", "overwrite entries already present at the target", false)
   .option("--format <fmt>", "table | json", "table")
   .action(
-    async (
-      archive: string,
-      opts: { dryRun?: boolean; replace?: boolean; format: string },
-    ) => {
+    async (archive: string, opts: { dryRun?: boolean; replace?: boolean; format: string }) => {
       try {
         await runRestore(archive, opts);
       } catch (e) {
@@ -561,15 +574,13 @@ program
     parseInt(v, 10),
   )
   .option("--format <fmt>", "summary | runs | json (default: summary)", "summary")
-  .action(
-    async (opts: { project?: string; since?: string; limit?: number; format: string }) => {
-      try {
-        await runTestTrends(opts);
-      } catch (e) {
-        err((e as Error).message);
-      }
-    },
-  );
+  .action(async (opts: { project?: string; since?: string; limit?: number; format: string }) => {
+    try {
+      await runTestTrends(opts);
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
 
 /**
  * Run the CLI command parser. Split out from the module-body `if` so the

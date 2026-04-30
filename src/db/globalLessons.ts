@@ -171,9 +171,7 @@ const HANDLE_CACHE = new Map<string, DatabaseSync>();
  * (`config.lessons.global_db_path: null`). Callers MUST branch on null
  * rather than treating it as an error.
  */
-export function getGlobalLessonsDb(
-  configuredPath: string | null | undefined,
-): DatabaseSync | null {
+export function getGlobalLessonsDb(configuredPath: string | null | undefined): DatabaseSync | null {
   const path = resolveGlobalLessonsPath(configuredPath);
   if (path === null) return null;
   let db = HANDLE_CACHE.get(path);

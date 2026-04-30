@@ -70,9 +70,7 @@ export function registerSpecGet(server: McpServer, deps: ServerDeps): void {
           const payload = success(
             [canonical],
             `Fetched spec at ${canonical} (${body.length} bytes).`,
-            parsed.expand
-              ? { content: body }
-              : { expand_hint: "Call spec_get with expand=true to include the file body." },
+            parsed.expand ? { content: body } : {},
           );
           return payload;
         },

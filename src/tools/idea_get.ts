@@ -1,8 +1,11 @@
 // idea_get — global scope.
 //
-// Fetch a single idea by slug or exact path. Reads the file from disk (files
-// are the source of truth) and returns frontmatter + body. Path is
-// re-validated against allowed_roots before read.
+// Fetch one or more ideas by slug or exact path. When a slug is provided,
+// all ideas with that slug are returned (ordered newest-first) rather than
+// only the most recent one — supports the case where the same slug was
+// captured on different days. Path lookup still returns exactly one item.
+// Files are the source of truth; path is re-validated against allowed_roots
+// before read.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -11,10 +14,7 @@ import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { writeAudit } from "../util/audit.js";
-import { queryRow } from "../util/db.js";
 import { McpError } from "../errors.js";
-
-const IdeaPathRowSchema = z.object({ path: z.string() });
 
 const IdeaGetInput = z
   .object({
@@ -27,55 +27,67 @@ const IdeaGetInput = z
     message: "idea_get requires either slug or path",
   });
 
+interface IdeaItem {
+  path: string;
+  body?: string;
+}
+
 export function registerIdeaGet(server: McpServer, deps: ServerDeps): void {
   server.registerTool(
     "idea_get",
     {
       title: "Get Idea",
       description:
-        "Fetch one captured idea by slug or absolute path. Returns {paths:[file]} plus summary. Pass expand=true to include the file body.",
+        "Fetch captured ideas by slug (returns all matching, newest first) or exact path (returns one). Returns {paths:[...files], summary}. Pass expand=true to include file bodies in the content array.",
       inputSchema: IdeaGetInput.shape,
     },
     async (args: z.infer<typeof IdeaGetInput>) => {
       return runTool(
         async () => {
           const parsed = IdeaGetInput.parse(args);
-          let path: string;
+          let paths: string[];
+
           if (parsed.path !== undefined) {
-            path = parsed.path;
-          } else {
-            // Zod refine guarantees slug is defined when path is absent.
-            const slug = parsed.slug!;
-            const row = queryRow(
-              deps.globalDb,
-              "SELECT path FROM ideas WHERE slug = ? ORDER BY created_at DESC LIMIT 1",
-              IdeaPathRowSchema,
-              [slug],
+            // Single-path lookup — validate and return one item.
+            const canonical = await assertInsideAllowedRoot(
+              parsed.path,
+              deps.config.workspace.allowed_roots,
             );
-            if (!row) throw new McpError("E_NOT_FOUND", `no idea with slug "${parsed.slug}"`);
-            path = row.path;
+            paths = [canonical];
+          } else {
+            // Slug lookup — return ALL matching rows, newest first.
+            const slug = parsed.slug!;
+            const rows = deps.globalDb
+              .prepare("SELECT path FROM ideas WHERE slug = ? ORDER BY created_at DESC")
+              .all(slug) as Array<{ path: string }>;
+            if (rows.length === 0) {
+              throw new McpError("E_NOT_FOUND", `no idea with slug "${slug}"`);
+            }
+            // Validate each path inside allowed_roots.
+            paths = await Promise.all(
+              rows.map((r) => assertInsideAllowedRoot(r.path, deps.config.workspace.allowed_roots)),
+            );
           }
 
-          const canonical = await assertInsideAllowedRoot(
-            path,
-            deps.config.workspace.allowed_roots,
-          );
-          let body: string;
-          try {
-            body = await readFile(canonical, "utf8");
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-              throw new McpError("E_NOT_FOUND", `idea file missing: ${canonical}`);
+          // Read each file (body only included when expand=true).
+          const items: IdeaItem[] = [];
+          for (const p of paths) {
+            let body: string;
+            try {
+              body = await readFile(p, "utf8");
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+                throw new McpError("E_NOT_FOUND", `idea file missing: ${p}`);
+              }
+              throw err;
             }
-            throw err;
+            items.push(parsed.expand ? { path: p, body } : { path: p });
           }
 
           return success(
-            [canonical],
-            `Fetched idea at ${canonical} (${body.length} bytes).`,
-            parsed.expand
-              ? { content: body }
-              : { expand_hint: "Call idea_get with expand=true to include the file body." },
+            paths,
+            `Fetched ${items.length} idea(s) matching ${parsed.slug ? `slug="${parsed.slug}"` : `path="${parsed.path}"`}.`,
+            parsed.expand ? { content: items } : {},
           );
         },
         (payload) => {

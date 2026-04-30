@@ -16,10 +16,7 @@ describe("reviewer overlay resolution", () => {
   beforeEach(async () => {
     kbRoot = await realpath(await mkdtemp(join(tmpdir(), "vcf-overlay-")));
     await mkdir(join(kbRoot, "reviewers"), { recursive: true });
-    await writeFile(
-      join(kbRoot, "reviewers", "reviewer-code.md"),
-      "# Base code reviewer\nBody.",
-    );
+    await writeFile(join(kbRoot, "reviewers", "reviewer-code.md"), "# Base code reviewer\nBody.");
     await writeFile(
       join(kbRoot, "reviewers", "reviewer-code.frontier.md"),
       "# Frontier overlay\nFrontier calibration.",
@@ -28,10 +25,7 @@ describe("reviewer overlay resolution", () => {
       join(kbRoot, "reviewers", "reviewer-code.local.md"),
       "# Local overlay\nLocal calibration.",
     );
-    await writeFile(
-      join(kbRoot, "reviewers", "reviewer-security.md"),
-      "# Base security\nBody.",
-    );
+    await writeFile(join(kbRoot, "reviewers", "reviewer-security.md"), "# Base security\nBody.");
   });
 
   afterEach(async () => {

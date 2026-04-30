@@ -199,9 +199,7 @@ export async function runUpdatePrimers(): Promise<void> {
   const report = await mergePrimerTree({ kbRoot, upstreamRoot, ancestorRoot });
   for (const o of report.outcomes) {
     if (o.kind === "conflict" || o.kind === "auto-merged") {
-      process.stderr.write(
-        `  [${o.kind.toUpperCase()}] ${o.rel}${o.note ? ` — ${o.note}` : ""}\n`,
-      );
+      process.stderr.write(`  [${o.kind.toUpperCase()}] ${o.rel}${o.note ? ` — ${o.note}` : ""}\n`);
     }
   }
   const c = report.counts;

@@ -39,7 +39,8 @@ describe("global DB", () => {
     const db = openGlobalDb({ path: p });
     const rows = db.prepare("SELECT version FROM schema_migrations").all();
     // All migrations applied exactly once; adding a new migration bumps this.
-    expect(rows.length).toBe(6);
+    // Phase G-D added migration 7 (ideas_fts).
+    expect(rows.length).toBe(7);
     db.close();
   });
 

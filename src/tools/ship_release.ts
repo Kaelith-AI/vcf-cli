@@ -43,10 +43,14 @@ import { setProjectState } from "../util/projectRegistry.js";
 
 // One store per server process — tokens evaporate on restart, which is
 // the intended behavior (a new process = new key = invalidate outstanding
-// tokens).
+// tokens). TTL is driven by config.ship.confirm_ttl_minutes (default 60 min).
 let store: ConfirmTokenStore | null = null;
-function getStore(): ConfirmTokenStore {
-  if (store === null) store = createConfirmTokenStore({ ttlMs: 60_000 });
+let storeTtlMs: number | null = null;
+function getStore(ttlMs: number): ConfirmTokenStore {
+  if (store === null || storeTtlMs !== ttlMs) {
+    store = createConfirmTokenStore({ ttlMs });
+    storeTtlMs = ttlMs;
+  }
   return store;
 }
 
@@ -92,7 +96,7 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
     {
       title: "Cut a GitHub Release (plan/confirm)",
       description:
-        "Plan or execute `gh release create`. Call once without confirm_token to receive the exact command + single-use token (60s TTL). Call again with the token to execute. The server refuses to run twice on the same token and refuses a mismatched input payload.",
+        "Plan or execute `gh release create`. Call once without confirm_token to receive the exact command + single-use token (TTL configurable via config.ship.confirm_ttl_minutes, default 60m). Call again with the token to execute. The server refuses to run twice on the same token and refuses a mismatched input payload.",
       inputSchema: ShipReleaseInput.shape,
     },
     async (args: Args) => {
@@ -142,7 +146,7 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
               const buildRow = deps.projectDb
                 .prepare(
                   `SELECT id FROM builds
-                   WHERE target LIKE 'ship_build%' AND status = 'success'
+                   WHERE target LIKE 'ship:%' AND status = 'success'
                      AND finished_at >= ?
                    ORDER BY finished_at DESC LIMIT 1`,
                 )
@@ -194,15 +198,17 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
           const cmd = buildGhArgs(parsed, projectRoot);
 
           // Plan-only call.
+          const confirmTtlMs = (deps.config.ship?.confirm_ttl_minutes ?? 60) * 60_000;
           if (parsed.confirm_token === undefined) {
-            const token = getStore().issue(planPayload);
+            const token = getStore(confirmTtlMs).issue(planPayload);
+            const ttlMinutes = deps.config.ship?.confirm_ttl_minutes ?? 60;
             auditBundle = {
               content: { ...planPayload, confirm_token: "<redacted>" },
               result_code: "ok",
             };
             const payload = success<unknown>(
               [projectRoot],
-              `ship_release plan: \`gh release create ${cmd.args.join(" ")}\` in ${projectRoot}. Single-use confirm_token issued (TTL 60s).`,
+              `ship_release plan: \`gh release create ${cmd.args.join(" ")}\` in ${projectRoot}. Single-use confirm_token issued (TTL ${ttlMinutes}m).`,
               parsed.expand
                 ? {
                     content: {
@@ -216,17 +222,14 @@ export function registerShipRelease(server: McpServer, deps: ServerDeps): void {
                           : "(empty)",
                     },
                   }
-                : {
-                    expand_hint:
-                      "Call ship_release with expand=true to receive the exact command + confirm_token.",
-                  },
+                : {},
             );
             return payload;
           }
 
           // Confirm call — validate the token or refuse.
           try {
-            getStore().consume(parsed.confirm_token, planPayload);
+            getStore(confirmTtlMs).consume(parsed.confirm_token, planPayload);
           } catch (err) {
             throw err instanceof McpError
               ? err
@@ -413,7 +416,7 @@ export function isSemverNewer(tag: string, prior: string): boolean {
   // Same numeric portion: pre-release < release per semver.
   const aPre = a[3];
   const bPre = b[3];
-  if (aPre === "" && bPre !== "") return true;  // release > pre-release
+  if (aPre === "" && bPre !== "") return true; // release > pre-release
   if (aPre !== "" && bPre === "") return false; // pre-release < release
   if (aPre === bPre) return false; // identical tag — not strictly newer
   // Both have pre-release; lexicographic comparison is a reasonable
@@ -442,4 +445,5 @@ function readProjectRoot(deps: ServerDeps): string | null {
 /** Test-only: reset the in-memory token store. */
 export function __resetShipReleaseStoreForTests(): void {
   store = null;
+  storeTtlMs = null;
 }

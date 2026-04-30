@@ -52,9 +52,7 @@ const ReviewTypeCreateInput = z
     quality_reference: z
       .enum(["code", "security", "production"])
       .default("code")
-      .describe(
-        "existing review type whose stage files serve as the quality bar for the new type",
-      ),
+      .describe("existing review type whose stage files serve as the quality bar for the new type"),
     mode: z.enum(["llm-driven", "endpoint"]).default("llm-driven"),
     expand: z.boolean().default(true),
   })
@@ -84,25 +82,27 @@ export function registerReviewTypeCreate(server: McpServer, deps: ServerDeps): v
           const prompt = buildPrompt(parsed);
           const kbRoot = deps.config.kb.root;
 
-          return success([], `review_type_create: scaffold for '${parsed.name}' (topic=${parsed.topic})`, {
-            ...(parsed.expand
-              ? {
-                  content: {
-                    name: parsed.name,
-                    topic: parsed.topic,
-                    mode: parsed.mode,
-                    suggested_step_count: parsed.suggested_step_count ?? null,
-                    quality_reference: parsed.quality_reference,
-                    quality_reference_dir: `${kbRoot}/review-system/${parsed.quality_reference}/`,
-                    stage_target_dir: `${kbRoot}/review-system/${parsed.name}/`,
-                    reviewer_target_path: `${kbRoot}/reviewers/reviewer-${parsed.name}.md`,
-                    scaffolding_prompt: prompt,
-                  },
-                }
-              : {
-                  expand_hint: "Pass expand=true for the scaffolding prompt + KB paths.",
-                }),
-          });
+          return success(
+            [],
+            `review_type_create: scaffold for '${parsed.name}' (topic=${parsed.topic})`,
+            {
+              ...(parsed.expand
+                ? {
+                    content: {
+                      name: parsed.name,
+                      topic: parsed.topic,
+                      mode: parsed.mode,
+                      suggested_step_count: parsed.suggested_step_count ?? null,
+                      quality_reference: parsed.quality_reference,
+                      quality_reference_dir: `${kbRoot}/review-system/${parsed.quality_reference}/`,
+                      stage_target_dir: `${kbRoot}/review-system/${parsed.name}/`,
+                      reviewer_target_path: `${kbRoot}/reviewers/reviewer-${parsed.name}.md`,
+                      scaffolding_prompt: prompt,
+                    },
+                  }
+                : {}),
+            },
+          );
         },
         (payload) => {
           writeAudit(deps.globalDb, {
@@ -198,6 +198,12 @@ function buildPrompt(parsed: ReviewTypeCreateArgs): string {
     `title: "<stage title>"`,
     `version: 0.1`,
     `updated: <YYYY-MM-DD>`,
+    `provenance:`,
+    `  tool: review_type_create`,
+    `  phase: review-type-stage`,
+    `  model: <exact model id of THIS stage's fill-in subagent>`,
+    `  endpoint: claude-code-subagent`,
+    `  generated_at: <ISO 8601>`,
     `---`,
     ``,
     `# Stage <N> — <title>`,
@@ -223,7 +229,9 @@ function buildPrompt(parsed: ReviewTypeCreateArgs): string {
     `Separately, author a \`reviewer-${name}.md\` overlay modeled on`,
     `\`<kb>/reviewers/reviewer-${parsed.quality_reference}.md\`. Carry forward`,
     `its Verdict Calibration + Self-learning sections; adjust the "What You`,
-    `Read Before Each Pass" and tone for the ${topic} context.`,
+    `Read Before Each Pass" and tone for the ${topic} context. Include the`,
+    `same \`provenance\` frontmatter block as the stage files (model = the`,
+    `agent that authored the overlay).`,
     ``,
     `## Phase 4 — Persist to KB`,
     ``,

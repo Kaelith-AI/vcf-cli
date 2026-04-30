@@ -67,6 +67,7 @@ export function registerBuildContext(server: McpServer, deps: ServerDeps): void 
           // before plan_save for exploration).
           const outputs = resolveOutputs(root, deps.config);
           const planPaths = {
+            charter: join(outputs.plansDir, `${parsed.plan_name}-charter.md`),
             plan: join(outputs.plansDir, `${parsed.plan_name}-plan.md`),
             todo: join(outputs.plansDir, `${parsed.plan_name}-todo.md`),
             manifest: join(outputs.plansDir, `${parsed.plan_name}-manifest.md`),
@@ -92,16 +93,16 @@ export function registerBuildContext(server: McpServer, deps: ServerDeps): void 
             standards_md: standards,
             vibe_best_practice_md: vibeBp,
             type_best_practice_md: typedBp,
+            charter: planBodies["charter"] ?? null,
             plan: planBodies,
             decisions,
             response_log_md: responseLog,
           };
+          const planFileCount = Object.values(planBodies).filter(Boolean).length;
           const payload = success(
             Object.values(planPaths),
-            `Build context for "${parsed.plan_name}" (builder_type=${parsed.builder_type}); ${Object.values(planBodies).filter(Boolean).length}/3 plan files present.`,
-            parsed.expand
-              ? { content: contextContent }
-              : { expand_hint: "Call build_context with expand=true for the assembled payload." },
+            `Build context for "${parsed.plan_name}" (builder_type=${parsed.builder_type}); ${planFileCount}/4 plan files present.`,
+            parsed.expand ? { content: contextContent } : {},
           );
           return payload;
         },

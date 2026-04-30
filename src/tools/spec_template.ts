@@ -46,12 +46,16 @@ export function registerSpecTemplate(server: McpServer, deps: ServerDeps): void 
       return runTool(
         async () => {
           const parsed = SpecTemplateInput.parse(args);
-          const rendered = renderTemplate(await readTemplate("spec-template.md.tpl"), {
-            PROJECT_NAME: parsed.project_name,
-            DATE: isoDate(),
-          });
+          // RAW_NOTES_SEED is the default content for the Raw Notes section.
+          // When idea_ref is provided, the idea body is prepended before it.
+          // We render it as a variable so the template engine can substitute
+          // it along with PROJECT_NAME/DATE in a single pass, avoiding a
+          // "missing variable" error on the placeholder token.
+          const RAW_NOTES_SEED_DEFAULT =
+            "_Use this section to preserve verbatim context from the capture conversation that doesn't fit above. A good PM spec can be reconstructed from the notes alone if the sections above are lost._";
+          const rawTemplate = await readTemplate("spec-template.md.tpl");
 
-          let withSeed = rendered;
+          let withSeed: string;
           let seededPath: string | undefined;
           if (parsed.idea_ref !== undefined) {
             const row = deps.globalDb
@@ -65,14 +69,25 @@ export function registerSpecTemplate(server: McpServer, deps: ServerDeps): void 
               deps.config.workspace.allowed_roots,
             );
             const ideaBody = await readFile(seededPath, "utf8");
-            withSeed = rendered.replace(
-              "_Use this section to preserve verbatim context",
-              "### From captured idea: " +
+            // Seed the Raw Notes section with the idea body, followed by the
+            // default instructional text so the author still has the prompt.
+            withSeed = renderTemplate(rawTemplate, {
+              PROJECT_NAME: parsed.project_name,
+              DATE: isoDate(),
+              RAW_NOTES_SEED:
+                "### From captured idea: " +
                 parsed.idea_ref +
                 "\n\n" +
                 ideaBody +
-                "\n\n_Use this section to preserve verbatim context",
-            );
+                "\n\n" +
+                RAW_NOTES_SEED_DEFAULT,
+            });
+          } else {
+            withSeed = renderTemplate(rawTemplate, {
+              PROJECT_NAME: parsed.project_name,
+              DATE: isoDate(),
+              RAW_NOTES_SEED: RAW_NOTES_SEED_DEFAULT,
+            });
           }
 
           const slug = slugify(parsed.project_name);
@@ -90,9 +105,7 @@ export function registerSpecTemplate(server: McpServer, deps: ServerDeps): void 
                     ...(seededPath ? { seeded_from: seededPath } : {}),
                   },
                 }
-              : {
-                  expand_hint: "Call spec_template with expand=true to receive the template text.",
-                },
+              : {},
           );
           return payload;
         },

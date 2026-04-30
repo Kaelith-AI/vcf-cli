@@ -18,6 +18,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { mkdir, writeFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { stringify as yamlStringify } from "yaml";
 import type { ServerDeps } from "../server.js";
 import { success, runTool } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
@@ -71,11 +72,13 @@ export function registerIdeaCapture(server: McpServer, deps: ServerDeps): void {
           // Re-validate the final target after we've computed it.
           await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
 
+          // Capture a single timestamp for both the DB row and the frontmatter.
+          const now = Date.now();
           const frontmatter = {
             type: "idea",
             slug,
             title: titleSource.slice(0, 256),
-            created: new Date().toISOString(),
+            created: new Date(now).toISOString(),
             tags: parsed.tags,
             ...(parsed.context !== undefined ? { context: parsed.context } : {}),
           };
@@ -89,29 +92,54 @@ export function registerIdeaCapture(server: McpServer, deps: ServerDeps): void {
             },
           );
 
+          // Extract body text (everything after the closing frontmatter ---).
+          const bodyText = extractBody(markdown);
+
           // Index in the global DB.
           deps.globalDb
             .prepare(
-              `INSERT INTO ideas (path, slug, tags, created_at, frontmatter_json)
-               VALUES (?, ?, ?, ?, ?)`,
+              `INSERT INTO ideas (path, slug, tags, created_at, frontmatter_json, body_text)
+               VALUES (?, ?, ?, ?, ?, ?)`,
             )
             .run(
               target,
               slug,
               JSON.stringify(parsed.tags),
-              Date.now(),
+              now,
               JSON.stringify(frontmatter),
+              bodyText,
             );
+
+          // Keep the FTS index current. Use INSERT OR REPLACE so a
+          // re-capture of the same slug doesn't leave a stale FTS row.
+          // Non-fatal if the FTS table doesn't exist yet (pre-migration DB).
+          try {
+            const row = deps.globalDb
+              .prepare("SELECT id FROM ideas WHERE path = ? LIMIT 1")
+              .get(target) as { id: number } | undefined;
+            if (row) {
+              deps.globalDb
+                .prepare(
+                  `INSERT OR REPLACE INTO ideas_fts(rowid, slug, title, context, tags, body_text)
+                   VALUES (?, ?, ?, ?, ?, ?)`,
+                )
+                .run(
+                  row.id,
+                  slug,
+                  frontmatter.title,
+                  parsed.context ?? "",
+                  JSON.stringify(parsed.tags),
+                  bodyText,
+                );
+            }
+          } catch {
+            /* FTS table may not exist on pre-migration DBs — non-fatal */
+          }
 
           return success(
             [target],
             `Captured idea "${slug}" with ${parsed.tags.length} tag(s).`,
-            parsed.expand
-              ? { content: markdown }
-              : {
-                  expand_hint:
-                    'Call idea_capture with {"expand": true} next time to receive the rendered markdown.',
-                },
+            parsed.expand ? { content: markdown } : {},
           );
         },
         (payload) => {
@@ -158,8 +186,20 @@ async function pickNonConflictingPath(
 }
 
 function renderMarkdown(frontmatter: Record<string, unknown>, body: string): string {
-  const yaml = Object.entries(frontmatter)
-    .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
-    .join("\n");
-  return `---\n${yaml}\n---\n\n${body.trim()}\n`;
+  // yaml.stringify produces a full YAML document including leading "---\n"
+  // and a trailing "\n". Strip those document delimiters so we can wrap the
+  // block in our own `---` fences and keep a stable document structure.
+  const yamlBlock = yamlStringify(frontmatter).trimEnd();
+  return `---\n${yamlBlock}\n---\n\n${body.trim()}\n`;
+}
+
+/**
+ * Extract the body text from a rendered markdown string (everything after
+ * the closing `---` frontmatter delimiter). Used for FTS body indexing.
+ */
+function extractBody(raw: string): string {
+  if (!raw.startsWith("---")) return raw;
+  const frontmatterEnd = raw.indexOf("\n---", 3);
+  if (frontmatterEnd < 0) return "";
+  return raw.slice(frontmatterEnd + 4).trim();
 }

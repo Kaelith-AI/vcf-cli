@@ -65,21 +65,53 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 export const EndpointTrustSchema = z.enum(["local", "trusted", "public"]);
 export type EndpointTrust = z.infer<typeof EndpointTrustSchema>;
 
+// Endpoint kind: how the dispatcher reaches it.
+//   - "api" — HTTP+key (existing path; default for back-compat)
+//   - "cli" — local subprocess (claude / codex / gemini / ollama). Web search
+//             and auth come "for free" via the harness; no auth_env_var needed.
+export const EndpointKindSchema = z.enum(["api", "cli"]);
+export type EndpointKind = z.infer<typeof EndpointKindSchema>;
+
+// CLI workdir lifecycle: ephemeral spawns each call in a fresh temp dir under
+// ~/.vcf/cli-runs/<uuid>/ (cleaned on exit) — required for parallel invocations
+// of the same harness. "persistent" reuses a stable dir; only safe for serial
+// calls.
+export const CliWorkdirModeSchema = z.enum(["ephemeral", "persistent"]);
+
 export const EndpointSchema = z
   .object({
     name: SlugSchema,
     // Broad provider taxonomy; adapters pick up `openai-compatible` for
     // Ollama / LM Studio / Together / Groq / OpenAI itself.
     provider: z.enum(["openai-compatible", "anthropic", "gemini", "local-stub"]),
-    base_url: z.string().url().max(1024),
+    // How the dispatcher reaches this endpoint. Defaults to "api" so existing
+    // configs (which omit kind) continue to validate.
+    kind: EndpointKindSchema.default("api"),
+    // Operator toggle: disable an endpoint without deleting it. Disabled
+    // endpoints are skipped by `vcf health` and excluded from role resolution
+    // (resolveRole throws E_ENDPOINT_DISABLED if a role's default points at
+    // one). Defaults true so omitting the field keeps the endpoint live.
+    enabled: z.boolean().default(true),
+    // API kind only. Optional at the schema level; superRefine enforces
+    // required-when-kind=api below so the error is field-targeted.
+    base_url: z.string().url().max(1024).optional(),
     // Env var name holding the API key. Value resolution happens at call
     // time — never at config-load time — so rotating a key doesn't require
-    // a server restart.
+    // a server restart. Ignored when kind=cli.
     auth_env_var: z
       .string()
       .regex(/^[A-Z_][A-Z0-9_]*$/, "env var names must be SCREAMING_SNAKE_CASE")
       .optional(),
     trust_level: EndpointTrustSchema,
+    // CLI kind only. Command name on PATH (e.g. "claude", "codex", "gemini",
+    // "ollama"). Required when kind=cli.
+    cmd: z.string().min(1).max(256).optional(),
+    // CLI kind only. Static args prepended to every spawn (e.g. structured
+    // output flags). Per-call args are appended by the adapter.
+    args: z.array(z.string().min(1).max(512)).max(32).optional(),
+    // CLI kind only. ephemeral spawns under ~/.vcf/cli-runs/<uuid>/ each
+    // call (clean-up on exit); persistent reuses a stable dir.
+    workdir_mode: CliWorkdirModeSchema.default("ephemeral"),
     // Provider-specific options merged into chat-completion request bodies as
     // `options`. Scoped per-endpoint so unknown keys don't get fanned out to
     // providers that might flag them (the OpenAI surface tolerates unknown
@@ -89,9 +121,78 @@ export const EndpointSchema = z
     // security/stage-7 calibration.
     provider_options: z.record(z.string(), z.unknown()).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((ep, ctx) => {
+    if (ep.kind === "api") {
+      if (!ep.base_url) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["base_url"],
+          message: `endpoint '${ep.name}' has kind='api' and must set base_url`,
+        });
+      }
+      if (ep.cmd !== undefined || ep.args !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["cmd"],
+          message: `endpoint '${ep.name}' has kind='api'; cmd/args are CLI-only fields`,
+        });
+      }
+    } else if (ep.kind === "cli") {
+      if (!ep.cmd) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["cmd"],
+          message: `endpoint '${ep.name}' has kind='cli' and must set cmd`,
+        });
+      }
+      if (ep.base_url !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["base_url"],
+          message: `endpoint '${ep.name}' has kind='cli'; base_url is API-only`,
+        });
+      }
+      if (ep.auth_env_var !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["auth_env_var"],
+          message: `endpoint '${ep.name}' has kind='cli'; auth_env_var is API-only (CLI auth is implicit)`,
+        });
+      }
+    }
+  });
 
 export type Endpoint = z.infer<typeof EndpointSchema>;
+
+// Capability tag vocabulary. Free-form at the schema level (so adding a new
+// capability is a one-line change in user config), but role.requires is
+// matched literally — typos surface as E_ROLE_CAPABILITY_MISMATCH.
+//
+// Recommended seed vocabulary (not enforced as enum so users can extend):
+//   frontier      — "frontier-tier" capability (large model, top tier)
+//   local         — runs on local hardware (Ollama, llama.cpp, etc.)
+//   web_search    — model has native web-search tool (or is on a CLI that does)
+//   harness       — invoked through a CLI harness (claude/codex/gemini)
+//   code_review   — qualified for the 27-gate code-review role (rubric-driven,
+//                   no research needed; local OK)
+//   long_context  — supports 200k+ context window
+//   vision        — multimodal image understanding
+const ModelTagSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9_]*$/, "model tags must be lowercase snake_case (e.g. web_search)");
+
+// Vendor identifies the model's organization (anthropic / openai / google /
+// meta / mistral / deepseek / xai / qwen / ollama-local / etc.). Used by the
+// panel resolver to enforce vendor diversity. Free-form string so new vendors
+// don't require a schema change.
+const VendorSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9-]*$/, "vendor must be lowercase kebab-case");
 
 export const ModelAliasSchema = z
   .object({
@@ -107,10 +208,99 @@ export const ModelAliasSchema = z
     // Optional preference flags — tools may pick the first alias whose
     // prefer_for array contains their role.
     prefer_for: z.array(SlugSchema).max(16).default([]),
+    // Vendor (organization) — used by panel resolution for vendor-diversity
+    // enforcement. Optional; roles requiring vendor_diverse panels fail at
+    // config-load if any panel slot is missing it.
+    vendor: VendorSchema.optional(),
+    // Capability tags — declarative. Roles state required tags; resolveRole
+    // verifies the chosen model satisfies role.requires ⊆ model.tags.
+    tags: z.array(ModelTagSchema).max(16).default([]),
   })
   .strict();
 
 export type ModelAlias = z.infer<typeof ModelAliasSchema>;
+
+// ---- Roles (capability-driven model selection) -----------------------------
+//
+// Roles are the call-site abstraction for "which model do I use here?". A role
+// declares its required capability tags and a default model alias (singleton
+// or panel). The resolver enforces:
+//   - default model exists in model_aliases
+//   - default model's endpoint is enabled
+//   - role.requires ⊆ model.tags (else E_ROLE_CAPABILITY_MISMATCH)
+//   - panel slots are vendor-disjoint when vendor_diverse=true
+//     (else E_PANEL_VENDOR_COLLISION)
+//
+// Roles split into singleton (one model per call — research_primary, kb_finalize,
+// gate_review_primary, builder_local) and panel (3-slot lineups —
+// research_panel, kb_review_panel). The same schema covers both via
+// `default` (singleton) vs `defaults` (array). Exactly one of the two MUST
+// be set per role.
+
+export const RoleSchema = z
+  .object({
+    // Singleton role: name of one model_aliases[].alias.
+    default: SlugSchema.optional(),
+    // Panel role: ordered list of model_aliases[].alias names. Array length
+    // must be in [1, 8]; the resolver feeds them to fan-out callers (research
+    // / KB-review pipelines).
+    defaults: z.array(SlugSchema).min(1).max(8).optional(),
+    // Capability tags every default model must carry. Empty list = no
+    // capability gate (role accepts any model).
+    requires: z.array(ModelTagSchema).max(16).default([]),
+    // Panel-only: enforce vendor uniqueness across `defaults`. Defaults true
+    // for panels (vendor diversity is the whole point of using a panel) and
+    // is ignored for singleton roles.
+    vendor_diverse: z.boolean().default(true),
+  })
+  .strict()
+  .superRefine((role, ctx) => {
+    const hasSingle = role.default !== undefined;
+    const hasPanel = role.defaults !== undefined;
+    if (hasSingle && hasPanel) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["default"],
+        message: "role: set exactly one of `default` (singleton) or `defaults` (panel), not both",
+      });
+    }
+    if (!hasSingle && !hasPanel) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["default"],
+        message: "role: must set one of `default` or `defaults`",
+      });
+    }
+  });
+
+export type Role = z.infer<typeof RoleSchema>;
+
+// Role name format. Slightly looser than SlugSchema — allow underscores
+// because role names like `research_primary`, `kb_review_primary` read more
+// naturally in snake_case. Kebab-case still works.
+const RoleNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9_-]*$/, "role names must be lowercase letters/digits/_/-");
+
+// Top-level roles map. Keys are role names (snake_case or kebab); values are
+// RoleSchema entries. Empty map is valid — projects without roles configured
+// continue to use legacy `defaults.<tool>` resolution.
+//
+// Reserved role-name vocabulary (not enforced as enum so users can extend):
+//   research_primary       — single, requires [frontier, web_search]
+//   research_panel         — 3-slot, requires [frontier, web_search],
+//                            vendor_diverse=true
+//   kb_review_primary      — single, requires [frontier, web_search]
+//   kb_review_panel        — 3-slot, requires [frontier, web_search],
+//                            vendor_diverse=true (and disjoint from research_panel)
+//   kb_finalize            — single, requires [frontier]
+//   gate_review_primary    — single, requires [code_review] (local OK)
+//   builder_local          — single, requires [local]
+export const RolesSchema = z.record(RoleNameSchema, RoleSchema).default({});
+
+export type Roles = z.infer<typeof RolesSchema>;
 
 // ---- Knowledge base location ------------------------------------------------
 
@@ -275,10 +465,32 @@ export const AuditSchema = z
 // in the top-level superRefine so a typo fails at config load, not on first
 // tool call.
 
+// Env-var name regex: standard POSIX identifier rules (letters / digits /
+// underscore, must not start with a digit). Stored as the NAME of the env
+// var, not the value — values live in process.env (typically populated from
+// ~/.vcf/secrets.env at vcf-mcp boot).
+const EnvVarNameSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be a valid env-var name (letters/digits/underscore)");
+
 const DefaultEntrySchema = z
   .object({
     endpoint: SlugSchema.optional(),
     model: z.string().min(1).max(128).optional(),
+    /**
+     * Per-feature auth key. Names an env var whose value is the API key
+     * to send as `Authorization: Bearer ...`. Falls back to the endpoint's
+     * own `auth_env_var` when unset, which is the right shape when many
+     * features share an endpoint (LiteLLM gateway). Override per-feature
+     * when one feature needs a different key (separate audit trail, or a
+     * read-only key for a low-trust feature).
+     */
+    key: EnvVarNameSchema.optional(),
+    backup_endpoint: SlugSchema.optional(),
+    backup_model: z.string().min(1).max(128).optional(),
+    backup_key: EnvVarNameSchema.optional(),
   })
   .strict();
 
@@ -290,6 +502,7 @@ export const DefaultsSchema = z
     research: DefaultEntrySchema.optional(),
     research_verify: DefaultEntrySchema.optional(),
     stress_test: DefaultEntrySchema.optional(),
+    charter_check: DefaultEntrySchema.optional(),
   })
   .strict();
 
@@ -399,18 +612,17 @@ export const ShipSchema = z
     strict_chain: z.boolean().default(false),
     // How far back (in minutes) ship_release looks for a passing audit+build
     // pair when strict_chain is true. Default 60 minutes.
-    strict_chain_window_minutes: z
-      .number()
-      .int()
-      .positive()
-      .max(1440)
-      .default(60),
+    strict_chain_window_minutes: z.number().int().positive().max(1440).default(60),
     // When true, ship_release additionally rejects if the provided tag is not
     // semver-newer than the last recorded release. With strict_chain=false
     // this is a soft-warn path: the tool logs a warning but still proceeds.
     // With strict_chain=true this becomes a hard gate (E_VALIDATION).
     // Default false.
     version_check: z.boolean().default(false),
+    // How long (in minutes) the single-use confirm_token issued by the plan
+    // call remains valid. Default 60 minutes (was hardcoded at 60 seconds
+    // in earlier versions — raised to match real-world review + confirm flows).
+    confirm_ttl_minutes: z.number().int().min(1).max(480).default(60),
   })
   .strict();
 
@@ -426,6 +638,10 @@ export const ConfigSchema = z
     workspace: WorkspaceSchema,
     endpoints: z.array(EndpointSchema).min(1).max(32),
     model_aliases: z.array(ModelAliasSchema).max(64).default([]),
+    // Capability-driven role bindings. Empty default keeps existing configs
+    // valid; new pipelines (research, KB-review, 27-gate) consume roles via
+    // resolveRole(). See RolesSchema for the reserved vocabulary.
+    roles: RolesSchema,
     kb: KnowledgeBaseSchema,
     review: ReviewSchema.default({
       categories: ["code", "security", "production"],
@@ -466,6 +682,7 @@ export const ConfigSchema = z
       strict_chain: false,
       strict_chain_window_minutes: 60,
       version_check: false,
+      confirm_ttl_minutes: 60,
     }),
   })
   .strict()
@@ -489,7 +706,7 @@ export const ConfigSchema = z
         message: `endpoint "${cfg.embeddings.endpoint}" is not declared in endpoints[]`,
       });
     }
-    // defaults.<tool>.endpoint — when set, must reference a declared endpoint.
+    // defaults.<tool>.endpoint + backup_endpoint — both must reference declared endpoints.
     if (cfg.defaults) {
       for (const [tool, entry] of Object.entries(cfg.defaults)) {
         if (entry?.endpoint && !endpointNames.has(entry.endpoint)) {
@@ -497,6 +714,13 @@ export const ConfigSchema = z
             code: z.ZodIssueCode.custom,
             path: ["defaults", tool, "endpoint"],
             message: `endpoint "${entry.endpoint}" is not declared in endpoints[]`,
+          });
+        }
+        if (entry?.backup_endpoint && !endpointNames.has(entry.backup_endpoint)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["defaults", tool, "backup_endpoint"],
+            message: `backup_endpoint "${entry.backup_endpoint}" is not declared in endpoints[]`,
           });
         }
       }
@@ -529,6 +753,7 @@ export const ConfigSchema = z
     }
     // Model alias names must be unique.
     const aliasNames = new Set<string>();
+    const aliasByName = new Map<string, (typeof cfg.model_aliases)[number]>();
     for (const [i, alias] of cfg.model_aliases.entries()) {
       if (aliasNames.has(alias.alias)) {
         ctx.addIssue({
@@ -538,6 +763,80 @@ export const ConfigSchema = z
         });
       }
       aliasNames.add(alias.alias);
+      aliasByName.set(alias.alias, alias);
+    }
+    // ---- Roles validation -------------------------------------------------
+    // Every role.default / role.defaults entry must:
+    //   1. reference a declared model alias
+    //   2. reference an endpoint that is enabled
+    //   3. carry every tag in role.requires (else E_ROLE_CAPABILITY_MISMATCH)
+    // Panel roles with vendor_diverse=true additionally require:
+    //   4. every panel slot has a vendor field
+    //   5. vendors are pairwise distinct (else E_PANEL_VENDOR_COLLISION)
+    const endpointByName = new Map(cfg.endpoints.map((e) => [e.name, e]));
+    for (const [roleName, role] of Object.entries(cfg.roles)) {
+      const slots: string[] = role.default !== undefined ? [role.default] : (role.defaults ?? []);
+      const isPanel = role.defaults !== undefined;
+      for (const [slotIdx, modelAliasName] of slots.entries()) {
+        const path = isPanel
+          ? ["roles", roleName, "defaults", slotIdx]
+          : ["roles", roleName, "default"];
+        const model = aliasByName.get(modelAliasName);
+        if (!model) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path,
+            message: `role '${roleName}' references unknown model alias '${modelAliasName}'`,
+          });
+          continue;
+        }
+        const endpoint = endpointByName.get(model.endpoint);
+        if (endpoint && !endpoint.enabled) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path,
+            message: `role '${roleName}' default '${modelAliasName}' uses disabled endpoint '${model.endpoint}'`,
+          });
+        }
+        // Capability check: role.requires ⊆ model.tags
+        const missing = role.requires.filter((t) => !model.tags.includes(t));
+        if (missing.length > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path,
+            message:
+              `role '${roleName}' requires capabilities [${role.requires.join(", ")}] but ` +
+              `model '${modelAliasName}' is missing [${missing.join(", ")}] (E_ROLE_CAPABILITY_MISMATCH)`,
+          });
+        }
+      }
+      // Vendor diversity (panel only)
+      if (isPanel && role.vendor_diverse) {
+        const seenVendors = new Map<string, number>();
+        for (const [slotIdx, modelAliasName] of slots.entries()) {
+          const model = aliasByName.get(modelAliasName);
+          if (!model) continue; // already errored above
+          if (!model.vendor) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["roles", roleName, "defaults", slotIdx],
+              message: `role '${roleName}' has vendor_diverse=true but model '${modelAliasName}' is missing vendor field`,
+            });
+            continue;
+          }
+          if (seenVendors.has(model.vendor)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["roles", roleName, "defaults", slotIdx],
+              message:
+                `role '${roleName}' panel has duplicate vendor '${model.vendor}' ` +
+                `(slots ${seenVendors.get(model.vendor)} and ${slotIdx}) — E_PANEL_VENDOR_COLLISION`,
+            });
+          } else {
+            seenVendors.set(model.vendor, slotIdx);
+          }
+        }
+      }
     }
   });
 

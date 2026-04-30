@@ -37,6 +37,26 @@ export const ERROR_CODES = {
     description: "destructive action needs a valid confirm_token",
   },
   E_INTERNAL: { retryable: false, description: "unexpected internal error" },
+  E_ROLE_CAPABILITY_MISMATCH: {
+    retryable: false,
+    description: "role default model is missing required capability tags",
+  },
+  E_PANEL_VENDOR_COLLISION: {
+    retryable: false,
+    description: "panel-role default models share a vendor (vendor_diverse=true)",
+  },
+  E_ENDPOINT_DISABLED: {
+    retryable: false,
+    description: "endpoint is disabled in config (enabled=false)",
+  },
+  E_CLI_NOT_FOUND: {
+    retryable: false,
+    description: "CLI endpoint command not on PATH",
+  },
+  E_CLI_AUTH_FAILED: {
+    retryable: false,
+    description: "CLI endpoint is not authenticated (login required)",
+  },
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

@@ -45,6 +45,8 @@ import { registerLifecycleReport } from "./tools/lifecycle_report.js";
 import { registerTestGenerate } from "./tools/test_generate.js";
 import { registerTestExecute } from "./tools/test_execute.js";
 import { registerTestAnalyze } from "./tools/test_analyze.js";
+import { registerTestStubGet } from "./tools/test_stub_get.js";
+import { registerTestResultsSearch } from "./tools/test_results_search.js";
 import { registerReviewPrepare } from "./tools/review_prepare.js";
 import { registerReviewSubmit } from "./tools/review_submit.js";
 import { registerReviewExecute } from "./tools/review_execute.js";
@@ -55,12 +57,16 @@ import { registerShipRelease } from "./tools/ship_release.js";
 import { registerCycleStatus } from "./tools/cycle_status.js";
 import { registerTestAddMissingCase } from "./tools/test_add_missing_case.js";
 import { registerConformanceCheck } from "./tools/conformance_check.js";
+import { registerCharterCheck } from "./tools/charter_check.js";
 import { registerVibeCheck } from "./tools/vibe_check.js";
 import { registerTestStress } from "./tools/test_stress.js";
 import { registerTestQa } from "./tools/test_qa.js";
 import { registerReviewTypeCreate } from "./tools/review_type_create.js";
 import { registerReviewTypeApply } from "./tools/review_type_apply.js";
 import { registerResearchCompose } from "./tools/research_compose.js";
+import { registerResearchAssemble } from "./tools/research_assemble.js";
+import { registerResearchVerify } from "./tools/research_verify.js";
+import { registerResearchResolve } from "./tools/research_resolve.js";
 import { registerProjectMove } from "./tools/project_move.js";
 import { registerProjectRename } from "./tools/project_rename.js";
 import { registerProjectRelocate } from "./tools/project_relocate.js";
@@ -185,11 +191,6 @@ export function createServer(deps: ServerDeps): McpServer {
     // Cross-project admin: role assignment lives at global scope because
     // it's a meta-operation on the registry itself, not on any one project.
     registerProjectSetRole(server, deps);
-    // #21 / #29: review-type builder + research compose — both are global
-    // because they touch the shared KB, not any one project's state.
-    registerReviewTypeCreate(server, deps);
-    registerReviewTypeApply(server, deps);
-    registerResearchCompose(server, deps);
   } else {
     // Project scope owns the full lifecycle.
     registerPortfolioStatus(server, deps);
@@ -209,6 +210,8 @@ export function createServer(deps: ServerDeps): McpServer {
     registerTestGenerate(server, deps);
     registerTestExecute(server, deps);
     registerTestAnalyze(server, deps);
+    registerTestStubGet(server, deps);
+    registerTestResultsSearch(server, deps);
     registerReviewPrepare(server, deps);
     registerReviewSubmit(server, deps);
     registerReviewExecute(server, deps);
@@ -219,15 +222,25 @@ export function createServer(deps: ServerDeps): McpServer {
     registerCycleStatus(server, deps);
     registerTestAddMissingCase(server, deps);
     registerConformanceCheck(server, deps);
+    registerCharterCheck(server, deps);
     registerVibeCheck(server, deps);
     registerTestStress(server, deps);
     registerTestQa(server, deps);
-    // PM-only admin tools: registered when the current project carries
-    // role='pm' in the global registry. Non-PM sessions never see these.
+    // Applying a custom review type is a project configuration action.
+    registerReviewTypeApply(server, deps);
+    // PM-only tools: system-growth and cross-project admin. Only accessible
+    // when the project is registered with role='pm' in the global registry.
+    // Regular build agents never see these — no wasted context.
     if (deps.resolved.projectRole === "pm") {
       registerProjectMove(server, deps);
       registerProjectRename(server, deps);
       registerProjectRelocate(server, deps);
+      // KB growth: create new review types and research/compose new KB entries.
+      registerReviewTypeCreate(server, deps);
+      registerResearchCompose(server, deps);
+      registerResearchAssemble(server, deps);
+      registerResearchVerify(server, deps);
+      registerResearchResolve(server, deps);
     }
   }
 

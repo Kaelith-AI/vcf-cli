@@ -111,10 +111,7 @@ export function registerResponseLogAdd(server: McpServer, deps: ServerDeps): voi
                     log_path: logPath,
                   },
                 }
-              : {
-                  expand_hint:
-                    "Call response_log_add with expand=true to receive the row id + rendered log path.",
-                },
+              : {},
           );
           return payload;
         },

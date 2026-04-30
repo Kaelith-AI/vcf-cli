@@ -83,9 +83,7 @@ export function registerReviewHistory(server: McpServer, deps: ServerDeps): void
             `review_history: ${rows.length} row(s)${parsed.type ? " type=" + parsed.type : ""}${
               parsed.stage !== undefined ? " stage=" + parsed.stage : ""
             }.`,
-            parsed.expand
-              ? { content: { runs: rows } }
-              : { expand_hint: "Call review_history with expand=true for the full list." },
+            parsed.expand ? { content: { runs: rows } } : {},
           );
           return payload;
         },

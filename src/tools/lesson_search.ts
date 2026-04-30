@@ -12,6 +12,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { DatabaseSync } from "node:sqlite";
 import type { ServerDeps } from "../server.js";
 import { success, runTool } from "../envelope.js";
 import { writeAudit } from "../util/audit.js";
@@ -145,9 +146,7 @@ export function registerLessonSearch(server: McpServer, deps: ServerDeps): void 
               total_considered: rows.length,
               returned: top.length,
             },
-            ...(parsed.expand
-              ? {}
-              : { expand_hint: "Pass expand=true for observation + context bodies." }),
+            ...(parsed.expand ? {} : {}),
           });
         },
         (payload) => {
@@ -174,10 +173,7 @@ interface PushdownOptions {
   projectRoot: string | null;
 }
 
-function readLessonsFiltered(
-  db: import("node:sqlite").DatabaseSync,
-  opts: PushdownOptions,
-): LessonRow[] {
+function readLessonsFiltered(db: DatabaseSync, opts: PushdownOptions): LessonRow[] {
   const where: string[] = [];
   const params: Array<string | number> = [];
 

@@ -89,7 +89,9 @@ async function main() {
   try {
     if (cmd === "list") {
       result = await request("tools/list", {});
-      console.log(JSON.stringify(result.result?.tools?.map((t) => t.name).sort() ?? result, null, 2));
+      console.log(
+        JSON.stringify(result.result?.tools?.map((t) => t.name).sort() ?? result, null, 2),
+      );
     } else if (cmd === "call") {
       const [name, argsJson = "{}", timeoutMsArg] = rest;
       const timeout = timeoutMsArg ? Number(timeoutMsArg) : 120_000;
@@ -125,7 +127,9 @@ async function main() {
       const reply = await request(method, JSON.parse(paramsJson));
       console.log(JSON.stringify(reply, null, 2));
     } else {
-      console.error(`usage: driver.mjs list | call | spec-save-from-file | plan-context | plan-save-from-files | raw`);
+      console.error(
+        `usage: driver.mjs list | call | spec-save-from-file | plan-context | plan-save-from-files | raw`,
+      );
       process.exit(2);
     }
   } catch (e) {
@@ -136,7 +140,9 @@ async function main() {
 
   child.stdin.end();
   setTimeout(() => {
-    try { child.kill(); } catch {}
+    try {
+      child.kill();
+    } catch {}
   }, 200);
 }
 

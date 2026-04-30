@@ -66,9 +66,9 @@ describe("adoptProject shared core", () => {
     expect(row?.adopted).toBe(1);
 
     // Global registry carries the slug + state.
-    const reg = globalDb.prepare("SELECT name, state_cache FROM projects WHERE name = ?").get(
-      "proj-a",
-    ) as { name: string; state_cache: string } | undefined;
+    const reg = globalDb
+      .prepare("SELECT name, state_cache FROM projects WHERE name = ?")
+      .get("proj-a") as { name: string; state_cache: string } | undefined;
     expect(reg?.name).toBe("proj-a");
     expect(reg?.state_cache).toBe("reviewing");
   });
@@ -96,9 +96,9 @@ describe("adoptProject shared core", () => {
     expect(r2.freshDb).toBe(false);
     expect(r2.existing).toEqual({ name: "Original", state: "building" });
     // Registry carries the PRESERVED state, not the new one.
-    const reg = globalDb.prepare("SELECT state_cache FROM projects WHERE root_path = ?").get(
-      root,
-    ) as { state_cache: string } | undefined;
+    const reg = globalDb
+      .prepare("SELECT state_cache FROM projects WHERE root_path = ?")
+      .get(root) as { state_cache: string } | undefined;
     expect(reg?.state_cache).toBe("building");
   });
 

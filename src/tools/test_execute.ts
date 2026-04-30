@@ -12,9 +12,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { spawn } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
+import { resolveOutputs } from "../util/outputs.js";
+import { slugify } from "../util/slug.js";
 import { writeAudit } from "../util/audit.js";
 import { McpError } from "../errors.js";
 import { throwIfCanceled } from "../util/cancellation.js";
@@ -33,6 +38,15 @@ const TestExecuteInput = z
       .optional()
       .describe("absolute path inside allowed_roots; defaults to the project root"),
     timeout_ms: z.number().int().min(1_000).max(600_000).default(120_000),
+    plan_name: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]*$/)
+      .min(1)
+      .max(128)
+      .optional()
+      .describe(
+        "plan name slug; when provided, test result is written to plans/test-results/ and indexed",
+      ),
     env: z
       .record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/), z.string().max(4_096))
       .optional()
@@ -215,15 +229,86 @@ export function registerTestExecute(server: McpServer, deps: ServerDeps): void {
             /* non-fatal */
           }
 
-          const payload = success(
-            [cwdCanonical],
-            summary,
-            parsed.expand
-              ? { content: result }
-              : {
-                  expand_hint: "Call test_execute with expand=true to receive stdout/stderr tails.",
-                },
-          );
+          // Persist a test-result artifact if plan_name is provided.
+          const resultPaths: string[] = [cwdCanonical];
+          if (parsed.plan_name && projectRoot) {
+            try {
+              const outputs = resolveOutputs(projectRoot, deps.config);
+              const resultsDir = join(outputs.plansDir, "test-results");
+              await mkdir(resultsDir, { recursive: true });
+
+              // Timestamp slug: YYYYMMDD-HHMMss-<ms> — seconds + trailing
+              // ms suffix to avoid filename collision when two runs start
+              // within the same second (common in test suites).
+              const nowDate = new Date(startedAt);
+              const ts =
+                [
+                  nowDate.getFullYear(),
+                  String(nowDate.getMonth() + 1).padStart(2, "0"),
+                  String(nowDate.getDate()).padStart(2, "0"),
+                ].join("") +
+                "-" +
+                [
+                  String(nowDate.getHours()).padStart(2, "0"),
+                  String(nowDate.getMinutes()).padStart(2, "0"),
+                  String(nowDate.getSeconds()).padStart(2, "0"),
+                ].join("") +
+                `-${startedAt % 1_000}`;
+              const cmdSlug = slugify(parsed.command);
+              const fname = `${parsed.plan_name}-${ts}-${cmdSlug}.md`;
+              const resultPath = join(resultsDir, fname);
+
+              const isoTimestamp = new Date(startedAt).toISOString();
+              const frontmatter = [
+                "---",
+                `kind: test-result`,
+                `plan_name: ${parsed.plan_name}`,
+                `command: ${parsed.command}`,
+                `timestamp: ${isoTimestamp}`,
+                `exit_code: ${result.exit_code ?? -1}`,
+                `passed: ${passed}`,
+                `duration_ms: ${result.duration_ms}`,
+                "---",
+                "",
+              ].join("\n");
+              const body = [
+                `## stdout`,
+                result.stdout_tail || "(empty)",
+                `## stderr`,
+                result.stderr_tail || "(empty)",
+              ].join("\n\n");
+              const fileContent = frontmatter + body;
+
+              await writeFile(resultPath, fileContent, "utf8");
+              resultPaths.push(resultPath);
+
+              // Index in project.db artifacts.
+              // Store passed as 1/0 (integer) so json_extract comparisons work
+              // predictably across SQLite versions.
+              const metaJson = JSON.stringify({
+                passed: passed ? 1 : 0,
+                exit_code: result.exit_code ?? -1,
+                timestamp: isoTimestamp,
+                plan_name: parsed.plan_name,
+              });
+              const hash = "sha256:" + createHash("sha256").update(fileContent).digest("hex");
+              deps.projectDb
+                ?.prepare(
+                  `INSERT INTO artifacts (path, kind, frontmatter_json, mtime, hash)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(path) DO UPDATE SET
+                     kind = excluded.kind,
+                     frontmatter_json = excluded.frontmatter_json,
+                     mtime = excluded.mtime,
+                     hash = excluded.hash`,
+                )
+                .run(resultPath, "test-result", metaJson, Date.now(), hash);
+            } catch {
+              /* non-fatal — result write failures don't break the test run report */
+            }
+          }
+
+          const payload = success(resultPaths, summary, parsed.expand ? { content: result } : {});
           return payload;
         },
         (payload) => {

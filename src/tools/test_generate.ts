@@ -6,14 +6,20 @@
 // project's actual tech stack rather than a single generic placeholder.
 // Non-fannable kinds (unit, integration, regression) emit a single stub.
 //
-// This is prepare-only; no files are written. The client takes the returned
-// stubs and asks its LLM to flesh them out, then drives test_execute.
+// When save=true, stubs are written to plans/test-stubs/ and indexed in
+// project.db.artifacts. Default (save=false): prepare-only, no files written.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { writeAudit } from "../util/audit.js";
+import { assertInsideAllowedRoot } from "../util/paths.js";
+import { resolveOutputs } from "../util/outputs.js";
+import { slugify } from "../util/slug.js";
 import { McpError } from "../errors.js";
 
 const TEST_KINDS = [
@@ -38,6 +44,13 @@ const FANNABLE_KINDS: ReadonlySet<Kind> = new Set([
 
 const TestGenerateInput = z
   .object({
+    plan_name: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]*$/)
+      .min(1)
+      .max(128)
+      .optional()
+      .describe("plan name slug; required when save=true"),
     kinds: z.array(z.enum(TEST_KINDS)).min(1).max(TEST_KINDS.length).default(["unit"]),
     dependencies: z
       .array(z.string().regex(/^[a-z][a-z0-9-]*$/))
@@ -52,6 +65,10 @@ const TestGenerateInput = z
       .positive()
       .optional()
       .describe("volume stubs scale to 10× this user/request count; default 1000"),
+    save: z
+      .boolean()
+      .default(false)
+      .describe("write stubs to plans/test-stubs/ and index in project.db"),
     expand: z.boolean().default(true),
   })
   .strict();
@@ -77,7 +94,7 @@ export function registerTestGenerate(server: McpServer, deps: ServerDeps): void 
     {
       title: "Generate Test Stubs",
       description:
-        "Return test stubs per requested kind. Fannable kinds (db, prompt-injection, rate-limit, volume) produce one stub per listed dependency; others produce a single stub. Stubs are templates — the client LLM fills them. No files are written by this tool.",
+        "Return test stubs per requested kind. Fannable kinds (db, prompt-injection, rate-limit, volume) produce one stub per listed dependency; others produce a single stub. Stubs are templates — the client LLM fills them. Pass save=true to write to plans/test-stubs/ and index in project.db.",
       inputSchema: TestGenerateInput.shape,
     },
     async (args: z.infer<typeof TestGenerateInput>) => {
@@ -109,15 +126,88 @@ export function registerTestGenerate(server: McpServer, deps: ServerDeps): void 
             }
           }
 
+          // Optionally write stubs to disk and index in project.db.
+          const writtenPaths: string[] = [];
+          if (parsed.save) {
+            if (!parsed.plan_name) {
+              throw new McpError("E_VALIDATION", "plan_name is required when save=true");
+            }
+            const projectRoot = readProjectRoot(deps);
+            if (!projectRoot) throw new McpError("E_STATE_INVALID", "project row missing");
+            const outputs = resolveOutputs(projectRoot, deps.config);
+            const stubsDir = join(outputs.plansDir, "test-stubs");
+            await assertInsideAllowedRoot(stubsDir, deps.config.workspace.allowed_roots);
+            await mkdir(stubsDir, { recursive: true });
+
+            const now = new Date().toISOString();
+            for (const stub of stubs) {
+              const depSlug = stub.dependency ? slugify(stub.dependency) : "generic";
+              const stubSlug = `${stub.kind}-${depSlug}`;
+              const fname = `${parsed.plan_name}-${stubSlug}.md`;
+              const target = join(stubsDir, fname);
+              await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
+
+              // Stub origin is deterministic templating (no LLM). Whoever
+              // fills the stub in with real test logic should overwrite
+              // this block with their own model+endpoint+timestamp so the
+              // operator knows which model authored the actual test.
+              const frontmatter = [
+                "---",
+                `kind: test-stub`,
+                `test_kind: ${stub.kind}`,
+                `dependency: ${stub.dependency ?? ""}`,
+                `plan_name: ${parsed.plan_name}`,
+                `created: ${now}`,
+                `slug: ${stubSlug}`,
+                `provenance:`,
+                `  tool: test_generate`,
+                `  phase: test-stub-emit`,
+                `  model: deterministic`,
+                `  endpoint: vcf`,
+                `  generated_at: ${now}`,
+                "---",
+                "",
+                "<!-- When filling in the test logic, replace the `provenance` block",
+                "     above with your own model+endpoint+timestamp. -->",
+                "",
+              ].join("\n");
+              const content = frontmatter + stub.body;
+              await writeFile(target, content, "utf8");
+              writtenPaths.push(target);
+
+              // Index in project.db artifacts.
+              const hash = "sha256:" + createHash("sha256").update(content).digest("hex");
+              deps.projectDb
+                ?.prepare(
+                  `INSERT INTO artifacts (path, kind, frontmatter_json, mtime, hash)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(path) DO UPDATE SET
+                     kind = excluded.kind,
+                     mtime = excluded.mtime,
+                     hash = excluded.hash`,
+                )
+                .run(
+                  target,
+                  "test-stub",
+                  JSON.stringify({
+                    plan_name: parsed.plan_name,
+                    slug: stubSlug,
+                    test_kind: stub.kind,
+                  }),
+                  Date.now(),
+                  hash,
+                );
+            }
+          }
+
           const summary =
             `Generated ${stubs.length} test stub(s) across ${parsed.kinds.length} kind(s)` +
-            (parsed.dependencies.length > 0 ? ` × ${parsed.dependencies.length} dep(s).` : ".");
+            (parsed.dependencies.length > 0 ? ` × ${parsed.dependencies.length} dep(s).` : ".") +
+            (parsed.save ? ` Saved ${writtenPaths.length} file(s) to test-stubs/.` : "");
           const payload = success(
-            [],
+            writtenPaths,
             summary,
-            parsed.expand
-              ? { content: { stubs } }
-              : { expand_hint: "Call test_generate with expand=true to receive the stub bodies." },
+            parsed.expand ? { content: { stubs } } : {},
           );
           return payload;
         },

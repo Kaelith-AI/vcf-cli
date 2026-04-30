@@ -136,7 +136,23 @@ function extractFrontmatter(raw: string): Record<string, unknown> | null {
 function parseInlineList(value: string): string[] {
   const inner = value.slice(1, -1).trim();
   if (inner.length === 0) return [];
-  return inner.split(",").map((s) => s.trim().replace(/^["']|["']$/g, ""));
+  const items: string[] = [];
+  let current = "";
+  let inQuote = "";
+  for (const ch of inner) {
+    if (!inQuote && (ch === '"' || ch === "'")) {
+      inQuote = ch;
+    } else if (inQuote && ch === inQuote) {
+      inQuote = "";
+    } else if (!inQuote && ch === ",") {
+      items.push(current.trim().replace(/^["']|["']$/g, ""));
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  items.push(current.trim().replace(/^["']|["']$/g, ""));
+  return items;
 }
 
 function normalize(

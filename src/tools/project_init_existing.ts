@@ -102,15 +102,10 @@ interface StrictAuditResult {
  * manifest files. Any `.md` filename in those dirs counts — we're checking
  * presence, not content.
  */
-function auditStrict(
-  projectRoot: string,
-  specsDir: string,
-  plansDir: string,
-): StrictAuditResult {
-  const specPaths = [
-    ...listMarkdown(specsDir),
-    ...listMarkdown(join(projectRoot, "specs")),
-  ].filter((p, i, arr) => arr.indexOf(p) === i);
+function auditStrict(projectRoot: string, specsDir: string, plansDir: string): StrictAuditResult {
+  const specPaths = [...listMarkdown(specsDir), ...listMarkdown(join(projectRoot, "specs"))].filter(
+    (p, i, arr) => arr.indexOf(p) === i,
+  );
   const planPaths = listMarkdown(plansDir).filter((p) => /-plan\.md$/.test(p));
   const manifestPaths = listMarkdown(plansDir).filter((p) => /-manifest\.md$/.test(p));
 
@@ -193,6 +188,25 @@ function reconstructPrompt(projectRoot: string, name: string): string {
     `- Redact secrets. Any committed API key or token you spot during the`,
     `  read step should be flagged to the operator, not copied into spec`,
     `  body.`,
+    ``,
+    `## Provenance`,
+    ``,
+    `The spec you author is a long-lived KB-class artifact. When you call`,
+    `\`spec_save\`, include a \`provenance\` block in the spec's frontmatter:`,
+    ``,
+    `\`\`\`yaml`,
+    `provenance:`,
+    `  tool: project_init_existing`,
+    `  phase: reconstruct`,
+    `  model: <exact model id of the agent doing this reconstruction>`,
+    `  endpoint: claude-code-main`,
+    `  generated_at: <ISO 8601>`,
+    `\`\`\``,
+    ``,
+    `Reconstructed specs are inferred from code that may have been authored`,
+    `by humans — the spec is a model's READING of that code. Future operators`,
+    `revisiting the spec need to know which model did the reading, especially`,
+    `when re-validating against newer code.`,
   ].join("\n");
 }
 
@@ -229,11 +243,7 @@ export function registerProjectInitExisting(server: McpServer, deps: ServerDeps)
           let strictAudit: StrictAuditResult | null = null;
           if (parsed.mode === "strict") {
             const outputs = resolveOutputs(target, deps.config);
-            strictAudit = auditStrict(
-              target,
-              deps.config.workspace.specs_dir,
-              outputs.plansDir,
-            );
+            strictAudit = auditStrict(target, deps.config.workspace.specs_dir, outputs.plansDir);
             if (!strictAudit.ok) {
               throw new McpError(
                 "E_STATE_INVALID",
@@ -263,8 +273,7 @@ export function registerProjectInitExisting(server: McpServer, deps: ServerDeps)
             ? `Re-adopted project "${result.existing.name}" at ${target} (mode=${parsed.mode}, state preserved=${result.existing.state})${modeSuffix}.`
             : `Adopted project "${name}" at ${target} (mode=${parsed.mode}, state=${state}, fresh project.db=${result.freshDb})${modeSuffix}.`;
 
-          const prompt =
-            parsed.mode === "reconstruct" ? reconstructPrompt(target, name) : null;
+          const prompt = parsed.mode === "reconstruct" ? reconstructPrompt(target, name) : null;
 
           return success([target, result.projectDbPath], summary, {
             ...(parsed.expand
@@ -291,10 +300,7 @@ export function registerProjectInitExisting(server: McpServer, deps: ServerDeps)
                     ...(prompt ? { reconstruct_prompt: prompt } : {}),
                   },
                 }
-              : {
-                  expand_hint:
-                    "Call project_init_existing again with expand=true for the full payload (including the reconstruct_prompt).",
-                }),
+              : {}),
           });
         },
         (payload) => {

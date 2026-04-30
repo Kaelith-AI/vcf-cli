@@ -39,9 +39,7 @@ export function registerProjectList(server: McpServer, deps: ServerDeps): void {
           const payload = success(
             rows.map((r) => r.root_path),
             `project_list: ${rows.length} project(s) registered`,
-            parsed.expand
-              ? { content: { projects: rows } }
-              : { expand_hint: "Call project_list with expand=true for the full list." },
+            parsed.expand ? { content: { projects: rows } } : {},
           );
           return payload;
         },
@@ -103,9 +101,7 @@ export function registerPortfolioGraph(server: McpServer, deps: ServerDeps): voi
           const payload = success(
             filtered.map((p) => p.root_path),
             `portfolio_graph: ${filtered.length} active project(s), ${blockers.length} blocker edge(s)`,
-            parsed.expand
-              ? { content: graph }
-              : { expand_hint: "Call portfolio_graph with expand=true for the full graph." },
+            parsed.expand ? { content: graph } : {},
           );
           return payload;
         },

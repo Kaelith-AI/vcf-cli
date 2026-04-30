@@ -11,6 +11,7 @@ import { resolve as resolvePath } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { openGlobalDb } from "../db/global.js";
 import { openProjectDb } from "../db/project.js";
+import type { ProjectState } from "../db/project.js";
 import { projectDbPath } from "../project/stateDir.js";
 import {
   listProjects,
@@ -87,7 +88,7 @@ export async function runAdopt(opts: {
     const result = await adoptProject({
       root: absRoot,
       name,
-      state: state as import("../db/project.js").ProjectState,
+      state: state as ProjectState,
       globalDb,
     });
 
@@ -108,10 +109,7 @@ export async function runAdopt(opts: {
   }
 }
 
-export async function runProjectRegister(opts: {
-  path: string;
-  name?: string;
-}): Promise<void> {
+export async function runProjectRegister(opts: { path: string; name?: string }): Promise<void> {
   const absRoot = resolvePath(opts.path);
   const candidateName = opts.name ?? slugifyBasic(absRoot.split("/").pop() ?? "project");
   const statePath = projectDbPath(candidateName);
@@ -232,7 +230,9 @@ export async function runProjectMove(
     if (r.mode === "move") {
       log(`moved project '${r.slug}' from ${r.oldPath} to ${r.newPath}`);
     } else {
-      log(`copied project '${r.slug}' from ${r.oldPath} to ${r.newPath} (source retained; pass --move to delete it)`);
+      log(
+        `copied project '${r.slug}' from ${r.oldPath} to ${r.newPath} (source retained; pass --move to delete it)`,
+      );
     }
     if (r.sourceDeleteWarning) log(`warning: ${r.sourceDeleteWarning}`);
   } catch (e) {

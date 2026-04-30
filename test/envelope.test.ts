@@ -4,15 +4,15 @@ import { McpError } from "../src/errors.js";
 
 describe("envelope helpers", () => {
   it("success builds the expected shape", () => {
-    const s = success(["/a/b.md"], "did a thing", { expand_hint: "pass expand=true" });
+    const s = success(["/a/b.md"], "did a thing");
     expect(s.ok).toBe(true);
     expect(s.paths).toEqual(["/a/b.md"]);
     expect(s.summary).toBe("did a thing");
-    expect(s.expand_hint).toBe("pass expand=true");
+    expect("expand_hint" in s).toBe(false);
     expect("content" in s).toBe(false);
   });
 
-  it("success with content omits expand_hint when both provided", () => {
+  it("success with content includes it", () => {
     const s = success(["/a"], "ok", { content: { hi: 1 } });
     expect(s.content).toEqual({ hi: 1 });
   });

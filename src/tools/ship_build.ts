@@ -136,12 +136,7 @@ export function registerShipBuild(server: McpServer, deps: ServerDeps): void {
           const payload = success(
             [projectRoot],
             summary,
-            parsed.expand
-              ? { content: { results, any_failure: anyFailure } }
-              : {
-                  expand_hint:
-                    "Call ship_build with expand=true for stdout/stderr tails per target.",
-                },
+            parsed.expand ? { content: { results, any_failure: anyFailure } } : {},
           );
           auditOutputs = {
             ...payload,

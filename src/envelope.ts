@@ -1,9 +1,11 @@
 // The canonical MCP tool output envelope.
 //
-// Success: { ok: true, paths, summary, expand_hint?, content? }
+// Success: { ok: true, paths, summary, content? }
 //   `content` is only included when the caller passed `expand=true` on the
 //   tool input (schema enforces default false). This is the token-economy
 //   contract: paths + summary by default, full content on demand.
+//   expand_hint has been removed — canonical usage lives in the usage guide,
+//   not in runtime tool responses.
 //
 // Failure: { ok: false, code, message, detail?, retryable }
 //   Code is a stable string from ./errors.ts; message is human-readable;
@@ -23,7 +25,6 @@ export interface SuccessPayload<TContent = unknown> {
   ok: true;
   paths: string[];
   summary: string;
-  expand_hint?: string;
   content?: TContent;
 }
 
@@ -44,7 +45,6 @@ export const EnvelopeOutputSchema = z.union([
       ok: z.literal(true),
       paths: z.array(z.string()),
       summary: z.string(),
-      expand_hint: z.string().optional(),
       content: z.unknown().optional(),
     })
     .strict(),
@@ -60,7 +60,6 @@ export const EnvelopeOutputSchema = z.union([
 ]);
 
 export interface SuccessOptions<TContent = unknown> {
-  expand_hint?: string;
   content?: TContent;
 }
 
@@ -71,7 +70,6 @@ export function success<TContent = unknown>(
   opts: SuccessOptions<TContent> = {},
 ): SuccessPayload<TContent> {
   const out: SuccessPayload<TContent> = { ok: true, paths, summary };
-  if (opts.expand_hint !== undefined) out.expand_hint = opts.expand_hint;
   if (opts.content !== undefined) out.content = opts.content;
   return out;
 }

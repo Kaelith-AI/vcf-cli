@@ -48,7 +48,7 @@ export function registerCycleStatus(server: McpServer, deps: ServerDeps): void {
           const lastBuildRow = deps.projectDb
             .prepare(
               `SELECT finished_at FROM builds
-               WHERE target LIKE 'ship_build%' AND status = 'success'
+               WHERE target LIKE 'ship:%' AND status = 'success'
                ORDER BY finished_at DESC LIMIT 1`,
             )
             .get() as { finished_at: number } | undefined;
@@ -67,8 +67,7 @@ export function registerCycleStatus(server: McpServer, deps: ServerDeps): void {
           const lastBuildAt = lastBuildRow?.finished_at ?? null;
           const lastTestAt = lastTestRow?.ts ?? null;
           const needsTest =
-            lastBuildAt !== null &&
-            (lastTestAt === null || lastBuildAt > lastTestAt);
+            lastBuildAt !== null && (lastTestAt === null || lastBuildAt > lastTestAt);
 
           const status = {
             last_build_at: lastBuildAt,
@@ -83,9 +82,7 @@ export function registerCycleStatus(server: McpServer, deps: ServerDeps): void {
               : lastBuildAt === null
                 ? `Build/test cycle: no builds recorded yet.`
                 : `Build/test cycle: test_execute is current (last_test >= last_build).`,
-            parsed.expand
-              ? { content: status }
-              : { expand_hint: "Call cycle_status with expand=true for the full status object." },
+            parsed.expand ? { content: status } : {},
           );
         },
         (payload) => {

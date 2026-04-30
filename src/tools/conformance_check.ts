@@ -53,10 +53,7 @@ export function registerConformanceCheck(server: McpServer, deps: ServerDeps): v
       return runTool(
         async () => {
           if (!deps.projectDb) {
-            throw new McpError(
-              "E_STATE_INVALID",
-              "conformance_check requires project scope",
-            );
+            throw new McpError("E_STATE_INVALID", "conformance_check requires project scope");
           }
           const parsed = ConformanceCheckInput.parse(args);
           const projectRoot = readProjectRoot(deps);
@@ -119,12 +116,11 @@ export function registerConformanceCheck(server: McpServer, deps: ServerDeps): v
           const orphanDecisions = auditDecisions(decisionsDir);
           findings.push(...orphanDecisions);
 
-          const verdict =
-            findings.some((f) => f.severity === "blocker")
-              ? "BLOCK"
-              : findings.some((f) => f.severity === "warning")
-                ? "NEEDS_WORK"
-                : "PASS";
+          const verdict = findings.some((f) => f.severity === "blocker")
+            ? "BLOCK"
+            : findings.some((f) => f.severity === "warning")
+              ? "NEEDS_WORK"
+              : "PASS";
 
           const summary = `conformance_check: verdict=${verdict}, ${findings.length} finding(s) across ${claimed.length} manifest entries`;
 
@@ -140,9 +136,7 @@ export function registerConformanceCheck(server: McpServer, deps: ServerDeps): v
                     findings,
                   },
                 }
-              : {
-                  expand_hint: "Pass expand=true for the findings array.",
-                }),
+              : {}),
           });
         },
         (payload) => {
@@ -170,7 +164,8 @@ function extractManifestPaths(body: string): string[] {
   // `<path>` anywhere in the line, where path contains a / and ends with a
   // recognizable file extension. Filters headings like `### Overview` that
   // happen to contain backticked tokens.
-  const re = /`([a-zA-Z0-9_./\-]+\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|rb|java|kt|swift|md|yaml|yml|json|toml|sql|sh|html|css|scss))`/g;
+  const re =
+    /`([a-zA-Z0-9_./\-]+\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|rb|java|kt|swift|md|yaml|yml|json|toml|sql|sh|html|css|scss))`/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body)) !== null) {
     const p = m[1];

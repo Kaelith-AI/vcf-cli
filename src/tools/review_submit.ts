@@ -117,9 +117,7 @@ export function registerReviewSubmit(server: McpServer, deps: ServerDeps): void 
                     carry_forward: merged,
                   },
                 }
-              : {
-                  expand_hint: "Call review_submit with expand=true for the full content payload.",
-                },
+              : {},
           );
           return payload;
         },

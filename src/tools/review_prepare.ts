@@ -31,7 +31,6 @@ import { dirname, join } from "node:path";
 import { simpleGit } from "simple-git";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
-import { assertInsideAllowedRoot } from "../util/paths.js";
 import { writeAudit } from "../util/audit.js";
 import { isoCompactNow } from "../util/ids.js";
 import { McpError } from "../errors.js";
@@ -245,9 +244,7 @@ export function registerReviewPrepare(server: McpServer, deps: ServerDeps): void
               (x): x is string => x !== null,
             ),
             `Prepared ${parsed.type} review stage ${parsed.stage} as run ${runId}${parsed.force ? " (force)" : ""}.`,
-            parsed.expand
-              ? { content: manifest }
-              : { expand_hint: "Call review_prepare with expand=true for the manifest." },
+            parsed.expand ? { content: manifest } : {},
           );
           return payload;
         },
@@ -381,9 +378,9 @@ async function selectLenses(
  */
 async function resolveSpecTags(deps: ServerDeps, _root: string): Promise<Set<string>> {
   try {
-    const specRow = deps.projectDb
-      ?.prepare("SELECT spec_path FROM project WHERE id = 1")
-      .get() as { spec_path: string | null } | undefined;
+    const specRow = deps.projectDb?.prepare("SELECT spec_path FROM project WHERE id = 1").get() as
+      | { spec_path: string | null }
+      | undefined;
     if (!specRow?.spec_path) return new Set();
 
     const specRow2 = deps.globalDb

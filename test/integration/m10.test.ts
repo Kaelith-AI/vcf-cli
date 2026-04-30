@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { openGlobalDb, openProjectDb, closeTrackedDbs } from "../helpers/db-cleanup.js";
+import type * as Fs from "node:fs";
 
 // M10 exercises the built `vcf` CLI end-to-end. We shell out to
 // dist/cli.js so packaging regressions (missing file in "files",
@@ -66,7 +67,7 @@ describe("M10 vcf CLI", () => {
     ].join("\n");
     const path = join(home, ".vcf", "config.yaml");
     // ensure dir exists synchronously — cross-platform
-    const fsSync = require("node:fs") as typeof import("node:fs");
+    const fsSync: typeof Fs = require("node:fs");
     fsSync.mkdirSync(join(home, ".vcf"), { recursive: true });
     fsSync.writeFileSync(path, body);
     return path;

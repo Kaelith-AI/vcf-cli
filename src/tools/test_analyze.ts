@@ -109,9 +109,7 @@ export function registerTestAnalyze(server: McpServer, deps: ServerDeps): void {
               : `Tests failed: ${matches.length} reported, exit=${parsed.exit_code ?? "?"}${
                   note ? "; " + note : ""
                 }.`,
-            parsed.expand
-              ? { content: result }
-              : { expand_hint: "Call test_analyze with expand=true for the failure list." },
+            parsed.expand ? { content: result } : {},
           );
         },
         (payload) => {

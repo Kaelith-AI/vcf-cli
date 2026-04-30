@@ -45,9 +45,24 @@ const STAGES = (process.env.VCF_MATRIX_STAGES ?? "1,2,3,4,5,6,7,8,9")
 // exposes. Labels appear as column headers in the matrix report.
 const MODELS = [
   { label: "gpt-5.4", endpoint: "litellm", model_id: "CLIProxyAPI/gpt-5.4", timeout_ms: 180_000 },
-  { label: "claude-opus-4-7", endpoint: "litellm", model_id: "CLIProxyAPI/claude-opus-4-7", timeout_ms: 240_000 },
-  { label: "gemini-2.5-pro", endpoint: "litellm", model_id: "CLIProxyAPI/gemini-2.5-pro", timeout_ms: 240_000 },
-  { label: "qwen3-coder-30b", endpoint: "local-ollama", model_id: "qwen3-coder:30b", timeout_ms: 360_000 },
+  {
+    label: "claude-opus-4-7",
+    endpoint: "litellm",
+    model_id: "CLIProxyAPI/claude-opus-4-7",
+    timeout_ms: 240_000,
+  },
+  {
+    label: "gemini-2.5-pro",
+    endpoint: "litellm",
+    model_id: "CLIProxyAPI/gemini-2.5-pro",
+    timeout_ms: 240_000,
+  },
+  {
+    label: "qwen3-coder-30b",
+    endpoint: "local-ollama",
+    model_id: "qwen3-coder:30b",
+    timeout_ms: 360_000,
+  },
   { label: "gemma4-31b", endpoint: "local-ollama", model_id: "gemma4:31b", timeout_ms: 360_000 },
   { label: "qwen3-32b", endpoint: "local-ollama", model_id: "qwen3:32b", timeout_ms: 360_000 },
 ];
@@ -131,9 +146,7 @@ async function main() {
     capabilities: {},
     clientInfo: { name: "review-matrix", version: "0" },
   });
-  child.stdin.write(
-    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n",
-  );
+  child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
 
   const startedAt = Date.now();
   const report = {
@@ -147,11 +160,7 @@ async function main() {
     summary: { total: 0, completed: 0, failed: 0, disagreements: 0 },
   };
 
-  const ts = new Date(startedAt)
-    .toISOString()
-    .replace(/[:.]/g, "")
-    .replace(/-/g, "")
-    .slice(0, 15);
+  const ts = new Date(startedAt).toISOString().replace(/[:.]/g, "").replace(/-/g, "").slice(0, 15);
   const outJson = join(__dirname, `matrix-${ts}.json`);
   const outMd = join(__dirname, `matrix-${ts}.md`);
   const flush = () => {
@@ -255,9 +264,7 @@ async function main() {
         if (maxCluster < totalVerdicts) {
           report.summary.disagreements++;
           // Outliers = labels not in the majority cluster.
-          const majority = Object.entries(verdicts).find(
-            ([, arr]) => arr.length === maxCluster,
-          )[0];
+          const majority = Object.entries(verdicts).find(([, arr]) => arr.length === maxCluster)[0];
           for (const [label, rec] of Object.entries(stageRow.per_model)) {
             if (rec.verdict && rec.verdict !== majority) {
               stageRow.outliers.push({ model: label, verdict: rec.verdict });
@@ -332,7 +339,9 @@ function renderMarkdown(report) {
     lines.push(`- Total runs attempted: ${report.summary.total}`);
     lines.push(`- Completed: ${report.summary.completed}`);
     lines.push(`- Failed: ${report.summary.failed}`);
-    lines.push(`- Stages with disagreement: ${report.summary.disagreements} / ${report.runs.length}`);
+    lines.push(
+      `- Stages with disagreement: ${report.summary.disagreements} / ${report.runs.length}`,
+    );
   }
   lines.push("");
   lines.push("## Finding fingerprints (agreement clustering)");

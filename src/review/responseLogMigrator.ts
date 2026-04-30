@@ -34,7 +34,7 @@ export interface ParsedResponseLogEntry {
   migration_note: string | null;
 }
 
-const BLOCK_DELIMITER = /(^|\n)---\s*\n/g;
+const _BLOCK_DELIMITER = /(^|\n)---\s*\n/g;
 
 /**
  * Parse the v1 markdown format. Each entry is a YAML-ish frontmatter

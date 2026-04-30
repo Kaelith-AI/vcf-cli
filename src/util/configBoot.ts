@@ -65,9 +65,7 @@ export function recordConfigBoot(
   }
 
   const prevRow = globalDb
-    .prepare(
-      "SELECT sha256 FROM config_boots WHERE config_path = ? ORDER BY ts DESC LIMIT 1",
-    )
+    .prepare("SELECT sha256 FROM config_boots WHERE config_path = ? ORDER BY ts DESC LIMIT 1")
     .get(configPath) as { sha256: string | null } | undefined;
   const prevSha = prevRow?.sha256 ?? null;
 

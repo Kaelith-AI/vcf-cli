@@ -76,10 +76,7 @@ export function registerPortfolioStatus(server: McpServer, deps: ServerDeps): vo
                     next_action: NEXT_ACTION[row.state],
                   },
                 }
-              : {
-                  expand_hint:
-                    "Call portfolio_status with expand=true for the full metadata block.",
-                }),
+              : {}),
           });
 
           return payload;

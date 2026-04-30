@@ -139,7 +139,13 @@ describe("Phase F — project admin (move / rename / relocate / PM role)", () =>
       const src = join(workRoot, "proj-c");
       await mkdir(src, { recursive: true });
       const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
-      await adoptProject({ root: src, name: "Proj C", state: "reviewing", globalDb, homeDir: home });
+      await adoptProject({
+        root: src,
+        name: "Proj C",
+        state: "reviewing",
+        globalDb,
+        homeDir: home,
+      });
       const outsidePath = join(tmpdir(), "out-of-scope-target-xyz");
       await expect(
         moveProject({
@@ -160,7 +166,13 @@ describe("Phase F — project admin (move / rename / relocate / PM role)", () =>
       const src = join(workRoot, "original");
       await mkdir(src, { recursive: true });
       const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
-      await adoptProject({ root: src, name: "Original", state: "reviewing", globalDb, homeDir: home });
+      await adoptProject({
+        root: src,
+        name: "Original",
+        state: "reviewing",
+        globalDb,
+        homeDir: home,
+      });
 
       const r = await renameProject({
         slug: "original",
@@ -200,7 +212,13 @@ describe("Phase F — project admin (move / rename / relocate / PM role)", () =>
       await mkdir(src, { recursive: true });
       await mkdir(moved, { recursive: true }); // operator moved the dir manually
       const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
-      await adoptProject({ root: src, name: "RelProj", state: "reviewing", globalDb, homeDir: home });
+      await adoptProject({
+        root: src,
+        name: "RelProj",
+        state: "reviewing",
+        globalDb,
+        homeDir: home,
+      });
 
       const r = await relocateProject({
         slug: "relproj",
@@ -221,7 +239,13 @@ describe("Phase F — project admin (move / rename / relocate / PM role)", () =>
       const src = join(workRoot, "src-rel-2");
       await mkdir(src, { recursive: true });
       const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
-      await adoptProject({ root: src, name: "RelProj2", state: "reviewing", globalDb, homeDir: home });
+      await adoptProject({
+        root: src,
+        name: "RelProj2",
+        state: "reviewing",
+        globalDb,
+        homeDir: home,
+      });
       await expect(
         relocateProject({
           slug: "relproj2",

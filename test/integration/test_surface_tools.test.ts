@@ -173,8 +173,8 @@ describe("test-surface tools (#12, #13, #14)", () => {
   });
 
   it("review_type_create returns a multi-phase scaffolding prompt", async () => {
-    // review_type_create is global-scope; the project-scope client above
-    // can't reach it. Spin up a separate global-scope client.
+    // review_type_create is PM-scoped (project scope + role=pm). Spin up a
+    // separate PM-role project-scope client.
     const config = ConfigSchema.parse({
       version: 1,
       workspace: {
@@ -194,8 +194,13 @@ describe("test-surface tools (#12, #13, #14)", () => {
     });
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
     const server = createServer({
-      scope: "global",
-      resolved: { scope: "global" },
+      scope: "project",
+      resolved: {
+        scope: "project",
+        projectRoot: projectDir,
+        projectSlug: "demo",
+        projectRole: "pm",
+      },
       config,
       globalDb,
       homeDir: home,
@@ -243,8 +248,13 @@ describe("test-surface tools (#12, #13, #14)", () => {
     });
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
     const server = createServer({
-      scope: "global",
-      resolved: { scope: "global" },
+      scope: "project",
+      resolved: {
+        scope: "project",
+        projectRoot: projectDir,
+        projectSlug: "demo",
+        projectRole: "pm",
+      },
       config,
       globalDb,
       homeDir: home,

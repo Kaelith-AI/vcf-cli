@@ -45,6 +45,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- **Company-standards template + deterministic `ship_audit` pass (#26).**
+  Company standards are now a user-overlay template, not a shipped policy
+  file. The KB's previous `standards/company-standards.md` was ported from
+  VCF 1.5 non-negotiables which duplicated the vibe-coding primer — that
+  duplication is removed, and the file is replaced with
+  `standards/company-standards.example.md`: a template with empty
+  `_TBD_` sections for versioning, ownership, commit/branch conventions,
+  license, dependency policy, install conventions, test-coverage floor,
+  and links to niche sub-standards. Three niche stubs ship alongside:
+  `design-system.example.md`, `brand.example.md`, `privacy.example.md`.
+  - `vcf standards init [kinds...]` copies the example files from the
+    upstream KB into `~/.vcf/kb/standards/<kind>.md` (stripping `.example`).
+    Idempotent — existing files are left alone. With no args, seeds all
+    four; accepts specific kinds (`vcf standards init design-system`).
+  - `ship_audit` gains a `company-standards` pass. Reads
+    `~/.vcf/kb/standards/company-standards.md` and runs every check
+    declared in its YAML frontmatter `checks:` block. All checks are
+    deterministic (binary pass/fail) — no prose-judgment checks are
+    supported. Missing file = pass skips with an "ok" status and a
+    `run 'vcf standards init'` hint; file present but no `checks:` block
+    = pass skips with "nothing to enforce." Four starter checks:
+    - `license_header: "Apache-2.0" | "<literal>"` — SPDX or verbatim
+      string must appear in the first 20 lines of every source file
+      (skips `.md`/`.yaml`/`.toml`/config files).
+    - `required_files: ["LICENSE", "CHANGELOG.md", ...]` — each path must
+      exist at project root.
+    - `branch_prefix: ["feat", "fix", ...]` — current branch name must
+      start with `<prefix>/` or `<prefix>-`. The default branch
+      (`main` / `master`) is exempt.
+    - `commit_style: "conventional"` — every commit in the scope window
+      must match Conventional Commits. Scope window: *on a non-default
+      branch* → since diverged from `main`/`master`; *on the default
+      branch* → since last tag; *default branch with no tags* → last 100
+      commits. The pass reports which window it used.
+  - Reviewer tools do NOT enforce standards — that remains subjective.
+    Enforcement lives 100% in `ship_audit`.
+  - 15 integration tests cover each check (pass + fail paths), the two
+    skip cases (no file, no checks block), and `runStandardsInit`
+    idempotency + specific-kind + unknown-kind rejection. 404 tests pass
+    (up from 389).
 - **#25 sweep tests** — integration coverage for the 8 ship-items that
   landed in commit 6cb0ae2 without tests (cycle_status happy+needs-test
   paths, spec status transitions, related_specs frontmatter + template,

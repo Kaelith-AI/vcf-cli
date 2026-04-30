@@ -80,7 +80,13 @@ export async function runTestTrends(opts: {
       }
       for (const r of rows) {
         const ts = new Date(r.started_at).toISOString();
-        const verdict = r.passed ? "PASS" : r.timed_out ? "TIMEOUT" : r.canceled ? "CANCELED" : "FAIL";
+        const verdict = r.passed
+          ? "PASS"
+          : r.timed_out
+            ? "TIMEOUT"
+            : r.canceled
+              ? "CANCELED"
+              : "FAIL";
         process.stderr.write(
           `${ts}  ${verdict.padEnd(8)} ${r.command.padEnd(20)} ${r.duration_ms.toString().padStart(6)}ms  ${r.project_root}\n`,
         );

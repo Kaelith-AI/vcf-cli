@@ -13,7 +13,40 @@ import { findProjectForCwd } from "../util/projectRegistry.js";
 import { loadConfig } from "../config/loader.js";
 import { canonicalizeRoots } from "../util/paths.js";
 import { loadKb } from "../primers/load.js";
+import { loadSecretsEnv } from "../util/secretsEnv.js";
+import { secretsEnvPath } from "../project/stateDir.js";
 import { DEFAULT_CONFIG_PATH, err, log, loadConfigOrExit, vcfHomeDir } from "./_shared.js";
+import { delimiter } from "node:path";
+
+/**
+ * Cross-platform `which`: search PATH for the executable. Returns the
+ * resolved absolute path on success, null otherwise. Skips PATH entries
+ * that aren't readable (defensive — broken PATH segments are common).
+ */
+async function whichCmd(cmd: string): Promise<string | null> {
+  // Absolute or relative path: just stat it.
+  if (cmd.includes("/")) {
+    try {
+      const st = statSync(cmd);
+      if (st.isFile()) return cmd;
+    } catch {
+      /* fall through */
+    }
+    return null;
+  }
+  const path = process.env["PATH"] ?? "";
+  for (const dir of path.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, cmd);
+    try {
+      const st = statSync(candidate);
+      if (st.isFile()) return candidate;
+    } catch {
+      /* not in this PATH entry */
+    }
+  }
+  return null;
+}
 
 interface VerifyFinding {
   section: string;
@@ -23,6 +56,41 @@ interface VerifyFinding {
 
 export async function runVerify(opts: { format?: string } = {}): Promise<void> {
   const findings: VerifyFinding[] = [];
+
+  // Load ~/.vcf/secrets.env into this process's env so the subsequent
+  // endpoint check reflects what vcf-mcp would see at boot. Same-process
+  // population is harmless — verify is a short-lived CLI invocation.
+  const secrets = loadSecretsEnv(secretsEnvPath());
+  if (!secrets.fileExists) {
+    findings.push({
+      section: "secrets-env",
+      level: "warn",
+      detail:
+        `${secrets.path} not found. Provider keys must come from the parent shell ` +
+        `instead — fragile when launched from a desktop launcher / IDE`,
+    });
+  } else {
+    if (secrets.permissive) {
+      findings.push({
+        section: "secrets-env",
+        level: "warn",
+        detail: `${secrets.path} mode is ${secrets.mode} — group/world readable. Run 'chmod 600 ${secrets.path}'`,
+      });
+    } else {
+      findings.push({
+        section: "secrets-env",
+        level: "ok",
+        detail: `${secrets.path} loaded — provides ${secrets.loaded.length + secrets.skipped.length} key(s) (${secrets.loaded.length} new, ${secrets.skipped.length} already in env)`,
+      });
+    }
+    if (secrets.invalid.length > 0) {
+      findings.push({
+        section: "secrets-env",
+        level: "warn",
+        detail: `${secrets.invalid.length} malformed line(s) in ${secrets.path}: ${secrets.invalid.slice(0, 5).join(", ")}`,
+      });
+    }
+  }
 
   let config: Awaited<ReturnType<typeof loadConfig>> | null = null;
   try {
@@ -108,6 +176,29 @@ export async function runVerify(opts: { format?: string } = {}): Promise<void> {
     }
 
     for (const e of config.endpoints) {
+      if (!e.enabled) {
+        findings.push({
+          section: "endpoints",
+          level: "warn",
+          detail: `${e.name}: disabled (enabled=false in config) — skipped`,
+        });
+        continue;
+      }
+      if (e.kind === "cli") {
+        // For CLI endpoints, verify the cmd resolves on PATH. We don't
+        // probe the harness here (that's `vcf health`); this is a config-
+        // sanity check, not a liveness check.
+        if (!e.cmd) continue; // schema enforces, defensive only
+        const found = await whichCmd(e.cmd);
+        findings.push({
+          section: "endpoints",
+          level: found ? "ok" : "error",
+          detail: found
+            ? `${e.name}: cli '${e.cmd}' found at ${found}`
+            : `${e.name}: cli '${e.cmd}' not on PATH (E_CLI_NOT_FOUND)`,
+        });
+        continue;
+      }
       if (e.auth_env_var === undefined) continue;
       if (process.env[e.auth_env_var] !== undefined) {
         findings.push({
@@ -268,7 +359,10 @@ export async function runStaleCheck(opts: { format?: string } = {}): Promise<voi
 
 interface HealthResult {
   name: string;
+  /** kind=api: HTTP base URL; kind=cli: command name (cmd) for display. */
   base_url: string;
+  /** Endpoint kind. CLI endpoints get a `which`-style probe in A9 (TODO). */
+  kind: "api" | "cli";
   reachable: boolean;
   status?: number;
   duration_ms: number;
@@ -293,19 +387,77 @@ async function pingEndpoint(url: string, timeoutMs: number): Promise<number | st
   }
 }
 
-export async function runHealth(
-  opts: { format?: string; timeoutMs?: number } = {},
-): Promise<void> {
+export async function runHealth(opts: { format?: string; timeoutMs?: number } = {}): Promise<void> {
   const config = await loadConfigOrExit();
   const timeout = opts.timeoutMs ?? 5000;
   const results: HealthResult[] = [];
   for (const ep of config.endpoints) {
+    if (!ep.enabled) {
+      results.push({
+        name: ep.name,
+        base_url: ep.kind === "api" ? (ep.base_url ?? "(unset)") : (ep.cmd ?? "(unset)"),
+        kind: ep.kind,
+        reachable: false,
+        duration_ms: 0,
+        error: "disabled",
+      });
+      continue;
+    }
+    if (ep.kind === "cli") {
+      // CLI probe: ask the adapter for a liveness check (typically
+      // `<cmd> --version`). Adapter returns ok:false with a short detail
+      // string when the cmd isn't on PATH or the harness isn't logged in.
+      // Stub adapters (codex, gemini) return ok:false with "not yet
+      // implemented" — surfaced as DOWN so the operator sees they need
+      // attention.
+      const { selectCliAdapter } = await import("../util/cliAdapters/index.js");
+      if (!ep.cmd) {
+        results.push({
+          name: ep.name,
+          base_url: "(unset)",
+          kind: "cli",
+          reachable: false,
+          duration_ms: 0,
+          error: "missing cmd",
+        });
+        continue;
+      }
+      const adapter = selectCliAdapter(ep.cmd);
+      const startedAt = Date.now();
+      const probe = await adapter.probe(ep.cmd);
+      const duration = Date.now() - startedAt;
+      const result: HealthResult = {
+        name: ep.name,
+        base_url: ep.cmd,
+        kind: "cli",
+        reachable: probe.ok,
+        duration_ms: duration,
+      };
+      if (!probe.ok) result.error = probe.detail ?? "probe failed";
+      results.push(result);
+      continue;
+    }
+    // kind === "api"
+    const baseUrl = ep.base_url;
+    if (!baseUrl) {
+      // schema superRefine prevents this — defensive only
+      results.push({
+        name: ep.name,
+        base_url: "(unset)",
+        kind: "api",
+        reachable: false,
+        duration_ms: 0,
+        error: "missing base_url",
+      });
+      continue;
+    }
     const startedAt = Date.now();
-    const probe = await pingEndpoint(ep.base_url, timeout);
+    const probe = await pingEndpoint(baseUrl, timeout);
     const duration = Date.now() - startedAt;
     const result: HealthResult = {
       name: ep.name,
-      base_url: ep.base_url,
+      base_url: baseUrl,
+      kind: "api",
       reachable: typeof probe === "number" && probe < 500,
       duration_ms: duration,
     };

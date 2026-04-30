@@ -125,12 +125,7 @@ export function registerPlanContext(server: McpServer, deps: ServerDeps): void {
           const payload = success(
             [specAbs, ...suggestions.map((s) => s.path)].slice(0, 10),
             `Plan context assembled for "${parsed.name}": ${suggestions.length} primer(s), ${techTags.length} tech tag(s).`,
-            parsed.expand
-              ? { content: contextContent }
-              : {
-                  expand_hint:
-                    "Call plan_context with expand=true to receive the assembled payload.",
-                },
+            parsed.expand ? { content: contextContent } : {},
           );
           return payload;
         },

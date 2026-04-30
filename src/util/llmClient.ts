@@ -142,6 +142,35 @@ function extractContent(json: unknown): string | null {
   return typeof c === "string" ? c : null;
 }
 
+// ---- Fallback wrapper -------------------------------------------------------
+
+export interface FallbackResult {
+  content: string;
+  /** True when primary failed and backup succeeded. */
+  usedBackup: boolean;
+}
+
+/**
+ * Call primary; on any LlmError except "canceled", try backup.
+ * Throws the backup's error (or the primary's if no backup) when both fail.
+ * Callers should surface `usedBackup` in their audit/summary so operators
+ * know the primary is degraded.
+ */
+export async function callChatCompletionWithFallback(
+  primary: ChatCompletionRequest,
+  backup?: ChatCompletionRequest,
+): Promise<FallbackResult> {
+  try {
+    const content = await callChatCompletion(primary);
+    return { content, usedBackup: false };
+  } catch (err) {
+    if (err instanceof LlmError && err.kind === "canceled") throw err;
+    if (!backup) throw err;
+    const content = await callChatCompletion(backup);
+    return { content, usedBackup: true };
+  }
+}
+
 // ---- Embeddings ------------------------------------------------------------
 
 export interface EmbeddingsRequest {

@@ -15,23 +15,25 @@ import { moveProject, MoveProjectError } from "../project/move.js";
 
 const ProjectMoveInput = z
   .object({
-    slug: z
-      .string()
-      .min(1)
-      .max(128)
-      .describe("registered project slug (kebab-case of name)"),
+    slug: z.string().min(1).max(128).describe("registered project slug (kebab-case of name)"),
     new_path: z
       .string()
       .min(1)
-      .describe("absolute path to move the project directory to; must live inside workspace.allowed_roots"),
+      .describe(
+        "absolute path to move the project directory to; must live inside workspace.allowed_roots",
+      ),
     mode: z
       .enum(["copy", "move"])
       .default("copy")
-      .describe("'copy' leaves the source directory intact; 'move' deletes it after copy+DB updates succeed"),
+      .describe(
+        "'copy' leaves the source directory intact; 'move' deletes it after copy+DB updates succeed",
+      ),
     force: z
       .boolean()
       .default(false)
-      .describe("proceed even if new_path exists and is non-empty; files at the target that collide with the source are overwritten"),
+      .describe(
+        "proceed even if new_path exists and is non-empty; files at the target that collide with the source are overwritten",
+      ),
     expand: z.boolean().default(false),
   })
   .strict();

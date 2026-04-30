@@ -65,18 +65,12 @@ export async function moveProject(input: MoveProjectInput): Promise<MoveProjectR
 
   const row = getProjectByName(globalDb, slug);
   if (!row) {
-    throw new MoveProjectError(
-      "E_NOT_FOUND",
-      `no registered project with slug '${slug}'`,
-    );
+    throw new MoveProjectError("E_NOT_FOUND", `no registered project with slug '${slug}'`);
   }
   const oldPath = resolvePath(row.root_path);
   const newPath = resolvePath(input.newPath);
   if (oldPath === newPath) {
-    throw new MoveProjectError(
-      "E_ALREADY_EXISTS",
-      `project '${slug}' is already at ${newPath}`,
-    );
+    throw new MoveProjectError("E_ALREADY_EXISTS", `project '${slug}' is already at ${newPath}`);
   }
 
   if (!isInsideAllowedRoots(newPath, input.allowedRoots)) {

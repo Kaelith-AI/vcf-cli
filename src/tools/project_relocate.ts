@@ -10,15 +10,13 @@ import { relocateProject, RelocateProjectError } from "../project/relocate.js";
 
 const ProjectRelocateInput = z
   .object({
-    slug: z
-      .string()
-      .min(1)
-      .max(128)
-      .describe("registered project slug"),
+    slug: z.string().min(1).max(128).describe("registered project slug"),
     new_path: z
       .string()
       .min(1)
-      .describe("absolute path to re-point root_path at; the directory must already exist and live inside workspace.allowed_roots"),
+      .describe(
+        "absolute path to re-point root_path at; the directory must already exist and live inside workspace.allowed_roots",
+      ),
     expand: z.boolean().default(false),
   })
   .strict();

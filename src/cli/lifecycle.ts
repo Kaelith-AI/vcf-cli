@@ -23,10 +23,7 @@ export async function runLifecycleReport(opts: {
   const project = findProjectForCwd(globalDb, target);
   if (!project) {
     globalDb.close();
-    err(
-      `no registered VCF project at or above ${target} — run 'vcf init' or 'vcf adopt' first`,
-      2,
-    );
+    err(`no registered VCF project at or above ${target} — run 'vcf init' or 'vcf adopt' first`, 2);
   }
   const dbPath = projectDbPath(project!.name);
   if (!existsSync(dbPath)) {
@@ -41,13 +38,17 @@ export async function runLifecycleReport(opts: {
     ? (opts.include.split(",").map((s) => s.trim()) as ReadonlyArray<string>)
     : undefined;
 
-  const { buildStructuredReport, renderStructuredMarkdown, runNarrativeCore, LifecycleReportInput } =
-    await import("../tools/lifecycle_report.js");
+  const {
+    buildStructuredReport,
+    renderStructuredMarkdown,
+    runNarrativeCore,
+    LifecycleReportInput,
+  } = await import("../tools/lifecycle_report.js");
   const { LIFECYCLE_SECTION_ORDER } = await import("../schemas/lifecycle-report.schema.js");
 
-  const resolvedInclude =
-    (include as (typeof LIFECYCLE_SECTION_ORDER)[number][] | undefined) ??
-    [...LIFECYCLE_SECTION_ORDER];
+  const resolvedInclude = (include as (typeof LIFECYCLE_SECTION_ORDER)[number][] | undefined) ?? [
+    ...LIFECYCLE_SECTION_ORDER,
+  ];
 
   const { getGlobalLessonsDb } = await import("../db/globalLessons.js");
   const lessonsDb = getGlobalLessonsDb(config.lessons.global_db_path);

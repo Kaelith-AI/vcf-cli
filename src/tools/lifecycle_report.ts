@@ -27,11 +27,14 @@ import { join } from "node:path";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { writeAudit, redact } from "../util/audit.js";
+import { assertApiEndpoint } from "../util/endpointKind.js";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { resolveOutputs } from "../util/outputs.js";
 import { getGlobalLessonsDb } from "../db/globalLessons.js";
 import { McpError } from "../errors.js";
-import { callChatCompletion, LlmError, type ChatMessage } from "../util/llmClient.js";
+import { callChatCompletionWithFallback, LlmError, type ChatMessage } from "../util/llmClient.js";
+import { buildBackupRequest, resolveAuthKey } from "../review/endpointResolve.js";
+import { buildProvenance, provenanceToYaml, type Provenance } from "../util/provenance.js";
 import {
   LIFECYCLE_REPORT_SCHEMA_VERSION,
   LIFECYCLE_SECTION_ORDER,
@@ -139,12 +142,7 @@ export function registerLifecycleReport(server: McpServer, deps: ServerDeps): vo
               markdown_path: mdPath,
               sections: report.sections.map((s) => s.section),
               narrative: narrativeMeta,
-              ...(parsed.expand
-                ? { report, markdown: rendered }
-                : {
-                    expand_hint:
-                      "Pass expand=true for the inlined structured report + rendered markdown.",
-                  }),
+              ...(parsed.expand ? { report, markdown: rendered } : {}),
             },
           });
         },
@@ -259,7 +257,13 @@ function buildAuditSection(opts: BuildOpts): LifecycleSection {
        WHERE project_root = ?`,
     )
     .get(opts.projectRoot) as
-    | { total: number; ok_count: number | null; err_count: number | null; earliest: number | null; latest: number | null }
+    | {
+        total: number;
+        ok_count: number | null;
+        err_count: number | null;
+        earliest: number | null;
+        latest: number | null;
+      }
     | undefined;
 
   const byToolRows = opts.globalDb
@@ -312,9 +316,7 @@ function buildArtifactsSection(opts: BuildOpts): LifecycleSection {
   for (const r of byKindRows) by_kind[r.kind] = r.n;
 
   const recent = opts.projectDb
-    .prepare(
-      "SELECT path, kind, mtime, hash FROM artifacts ORDER BY mtime DESC LIMIT ?",
-    )
+    .prepare("SELECT path, kind, mtime, hash FROM artifacts ORDER BY mtime DESC LIMIT ?")
     .all(opts.recentCap) as unknown as Array<{
     path: string;
     kind: string;
@@ -413,9 +415,8 @@ function buildResponsesSection(opts: BuildOpts): LifecycleSection {
 }
 
 function buildBuildsSection(opts: BuildOpts): LifecycleSection {
-  const total = (
-    opts.projectDb.prepare("SELECT COUNT(*) AS n FROM builds").get() as { n: number }
-  ).n;
+  const total = (opts.projectDb.prepare("SELECT COUNT(*) AS n FROM builds").get() as { n: number })
+    .n;
   const byStatusRows = opts.projectDb
     .prepare("SELECT status, COUNT(*) AS n FROM builds GROUP BY status ORDER BY n DESC")
     .all() as unknown as Array<{ status: string; n: number }>;
@@ -658,21 +659,27 @@ async function runNarrative(
 export async function runNarrativeCore(opts: RunNarrativeOpts): Promise<NarrativeResult> {
   const { config, parsed, report, mcpSignal } = opts;
   const endpointFromDefaults = parsed.endpoint === undefined;
-  const endpointName =
-    parsed.endpoint ?? config.defaults?.lifecycle_report?.endpoint;
+  const endpointName = parsed.endpoint ?? config.defaults?.lifecycle_report?.endpoint;
   if (!endpointName) {
     throw new McpError(
       "E_VALIDATION",
       "narrative mode needs endpoint (arg or config.defaults.lifecycle_report.endpoint)",
     );
   }
-  const endpoint = config.endpoints.find((e) => e.name === endpointName);
-  if (!endpoint) {
+  const endpointRaw = config.endpoints.find((e) => e.name === endpointName);
+  if (!endpointRaw) {
     throw new McpError(
       "E_VALIDATION",
       `endpoint '${endpointName}' not declared in config.endpoints`,
     );
   }
+  if (!endpointRaw.enabled) {
+    throw new McpError(
+      "E_ENDPOINT_DISABLED",
+      `endpoint '${endpointRaw.name}' is disabled (set enabled=true in config.endpoints)`,
+    );
+  }
+  const endpoint = assertApiEndpoint(endpointRaw);
   // Same defaults-resolution gate as review_execute: public trust always
   // requires opt-in; silent defaults routing to any non-local endpoint also
   // requires opt-in. Explicit endpoint arg (narrative mode's --frontier CLI
@@ -683,11 +690,7 @@ export async function runNarrativeCore(opts: RunNarrativeOpts): Promise<Narrativ
       `endpoint '${endpoint.name}' has trust_level='public'; pass allow_public_endpoint=true to override`,
     );
   }
-  if (
-    endpointFromDefaults &&
-    endpoint.trust_level !== "local" &&
-    !parsed.allow_public_endpoint
-  ) {
+  if (endpointFromDefaults && endpoint.trust_level !== "local" && !parsed.allow_public_endpoint) {
     throw new McpError(
       "E_STATE_INVALID",
       `endpoint '${endpoint.name}' resolved from config.defaults.lifecycle_report.endpoint has ` +
@@ -695,27 +698,24 @@ export async function runNarrativeCore(opts: RunNarrativeOpts): Promise<Narrativ
         `acknowledge the off-host route or set allow_public_endpoint=true`,
     );
   }
-  const modelId =
-    parsed.model_id ?? config.defaults?.lifecycle_report?.model;
+  const modelId = parsed.model_id ?? config.defaults?.lifecycle_report?.model;
   if (!modelId) {
     throw new McpError(
       "E_VALIDATION",
       "narrative mode needs model (arg or config.defaults.lifecycle_report.model)",
     );
   }
-  let apiKey: string | undefined;
-  if (endpoint.auth_env_var) {
-    apiKey = process.env[endpoint.auth_env_var];
-    if (!apiKey && endpoint.trust_level !== "local") {
-      throw new McpError(
-        "E_CONFIG_MISSING_ENV",
-        `env var ${endpoint.auth_env_var} is unset; endpoint '${endpoint.name}' needs it`,
-      );
-    }
+  const { apiKey, envVarName, source } = resolveAuthKey(
+    endpoint,
+    config.defaults?.lifecycle_report?.key,
+  );
+  if (!apiKey && envVarName && endpoint.trust_level !== "local") {
+    throw new McpError(
+      "E_CONFIG_MISSING_ENV",
+      `env var ${envVarName} is unset (referenced via ${source === "feature" ? "defaults.lifecycle_report.key" : `endpoints[${endpoint.name}].auth_env_var`}); endpoint '${endpoint.name}' needs it`,
+    );
   }
-  const providerOptions = endpoint.provider_options as
-    | Record<string, unknown>
-    | undefined;
+  const providerOptions = endpoint.provider_options as Record<string, unknown> | undefined;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), parsed.timeout_ms);
   const onAbort = (): void => ctrl.abort();
@@ -723,6 +723,7 @@ export async function runNarrativeCore(opts: RunNarrativeOpts): Promise<Narrativ
 
   try {
     const sectionProses: Array<{ section: string; prose: string }> = [];
+    let anyFallback = false;
     for (const section of report.sections) {
       if (section.section === "project") {
         // Project section has no LLM-worthy content beyond the summary.
@@ -730,18 +731,25 @@ export async function runNarrativeCore(opts: RunNarrativeOpts): Promise<Narrativ
       }
       const messages = buildNarrativePrompt(section);
       const redactedMessages = redact(messages) as ChatMessage[];
+      const primaryReq = {
+        baseUrl: endpoint.base_url,
+        apiKey,
+        model: modelId,
+        messages: redactedMessages,
+        temperature: 0.2,
+        signal: ctrl.signal,
+        ...(providerOptions ? { providerOptions } : {}),
+        ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+      };
+      const backupReq = buildBackupRequest(config, "lifecycle_report", primaryReq);
       let prose: string;
+      let usedBackup = false;
       try {
-        prose = await callChatCompletion({
-          baseUrl: endpoint.base_url,
-          apiKey,
-          model: modelId,
-          messages: redactedMessages,
-          temperature: 0.2,
-          signal: ctrl.signal,
-          ...(providerOptions ? { providerOptions } : {}),
-          ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-        });
+        ({ content: prose, usedBackup } = await callChatCompletionWithFallback(
+          primaryReq,
+          backupReq,
+        ));
+        if (usedBackup) anyFallback = true;
       } catch (e) {
         if (e instanceof LlmError) {
           if (e.kind === "canceled") throw new McpError("E_CANCELED", e.message);
@@ -755,11 +763,17 @@ export async function runNarrativeCore(opts: RunNarrativeOpts): Promise<Narrativ
       sectionProses.push({ section: section.section, prose: prose.trim() });
     }
 
+    const provenance = buildProvenance({
+      tool: "lifecycle_report",
+      phase: "lifecycle-narrative",
+      model: modelId,
+      endpoint: endpoint.name,
+      fallback_used: anyFallback,
+    });
     const markdown = composeNarrativeMarkdown({
       report,
       sectionProses,
-      modelId,
-      endpointName: endpoint.name,
+      provenance,
     });
     return { markdown, endpoint: endpoint.name, modelId };
   } finally {
@@ -795,10 +809,17 @@ function buildNarrativePrompt(section: LifecycleSection): ChatMessage[] {
 function composeNarrativeMarkdown(opts: {
   report: LifecycleReport;
   sectionProses: Array<{ section: string; prose: string }>;
-  modelId: string;
-  endpointName: string;
+  provenance: Provenance;
 }): string {
   const lines: string[] = [];
+  // Frontmatter — provenance up top so the operator knows which model
+  // wrote the prose before they read a single section.
+  lines.push("---");
+  lines.push(provenanceToYaml(opts.provenance));
+  lines.push(`schema_version: ${LIFECYCLE_REPORT_SCHEMA_VERSION}`);
+  lines.push(`structured_json: plans/lifecycle-report.json`);
+  lines.push("---");
+  lines.push("");
   lines.push("# Lifecycle Report (narrative)");
   lines.push("");
   lines.push(
@@ -824,8 +845,6 @@ function composeNarrativeMarkdown(opts: {
     lines.push("");
   }
 
-  lines.push("---");
-  lines.push(`generated_by: { model_id: "${opts.modelId}", endpoint: "${opts.endpointName}" }`);
   return lines.join("\n").trim() + "\n";
 }
 

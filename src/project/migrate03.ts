@@ -139,9 +139,9 @@ export function migrateProject03to05(input: Migrate03Input): Migrate03Result {
     const existing = new OpenDb(stateDbPath, { enableForeignKeyConstraints: true });
     let existingRoot: string | null = null;
     try {
-      const existingRow = existing
-        .prepare("SELECT root_path FROM project WHERE id=1")
-        .get() as { root_path: string } | undefined;
+      const existingRow = existing.prepare("SELECT root_path FROM project WHERE id=1").get() as
+        | { root_path: string }
+        | undefined;
       existingRoot = existingRow?.root_path ?? null;
     } finally {
       existing.close();
@@ -243,10 +243,7 @@ export function migrateProject03to05(input: Migrate03Input): Migrate03Result {
         /* ignore */
       }
     } catch (e) {
-      throw new Migrate03Error(
-        "E_FILESYSTEM",
-        `review-runs move failed: ${(e as Error).message}`,
-      );
+      throw new Migrate03Error("E_FILESYSTEM", `review-runs move failed: ${(e as Error).message}`);
     }
   }
 
@@ -317,4 +314,3 @@ export function discoverLegacyProjects(searchRoots: string[]): string[] {
     }
   }
 }
-

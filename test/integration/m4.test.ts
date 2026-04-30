@@ -185,8 +185,11 @@ describe("M4 global-scope fan-out", () => {
     });
     const envGet = parseResult(getRes);
     expect(envGet.ok).toBe(true);
-    expect(typeof envGet.content).toBe("string");
-    expect((envGet.content as string).includes("Build a cache")).toBe(true);
+    // idea_get now returns an array of {path, body} items (all matching slugs).
+    const items = envGet.content as Array<{ path: string; body: string }>;
+    expect(Array.isArray(items)).toBe(true);
+    expect(items.length).toBeGreaterThan(0);
+    expect(items[0]?.body?.includes("Build a cache")).toBe(true);
   });
 
   it("spec_template returns a rendered template; spec_save validates frontmatter", async () => {

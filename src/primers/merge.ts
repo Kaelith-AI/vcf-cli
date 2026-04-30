@@ -59,9 +59,7 @@ export async function seedKbIfMissing(
   logFn: (message: string) => void = defaultLog,
 ): Promise<void> {
   if (existsSync(kbRoot)) {
-    logFn(
-      `${kbRoot} already exists — leaving in place. Run 'vcf update-primers' to refresh.`,
-    );
+    logFn(`${kbRoot} already exists — leaving in place. Run 'vcf update-primers' to refresh.`);
     return;
   }
   const upstreamRoot = resolveUpstreamKbRoot();
@@ -96,11 +94,7 @@ export async function mergePrimerTree(opts: {
   upstreamRoot: string;
   ancestorRoot: string;
   /** Optional override for tests; defaults to real git. */
-  runGitMergeFile?: (
-    local: string,
-    ancestor: string,
-    upstream: string,
-  ) => { exitCode: number };
+  runGitMergeFile?: (local: string, ancestor: string, upstream: string) => { exitCode: number };
 }): Promise<MergeReport> {
   const { kbRoot, upstreamRoot, ancestorRoot } = opts;
   const runMerge = opts.runGitMergeFile ?? defaultRunGitMergeFile;

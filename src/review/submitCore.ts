@@ -13,6 +13,7 @@ import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { assertInsideAllowedRoot } from "../util/paths.js";
 import { isoCompactNow } from "../util/ids.js";
 import { McpError } from "../errors.js";
+import type { Provenance } from "../util/provenance.js";
 import {
   CARRY_FORWARD_SECTIONS,
   type CarryForward,
@@ -74,6 +75,12 @@ export interface PersistArgs {
   runDir: string;
   run: ReviewRunRow;
   submission: Submission;
+  /**
+   * Provenance for the verdict. Set by `review_execute` (LLM-authored
+   * verdict) or by `review_submit` (operator-authored verdict). Optional
+   * for back-compat with callers that don't yet pass it.
+   */
+  provenance?: Provenance;
 }
 
 export interface PersistResult {
@@ -83,7 +90,7 @@ export interface PersistResult {
 }
 
 export async function persistReviewSubmission(args: PersistArgs): Promise<PersistResult> {
-  const { projectDb, allowedRoots, reviewsDir, runDir, run, submission } = args;
+  const { projectDb, allowedRoots, reviewsDir, runDir, run, submission, provenance } = args;
 
   if (run.status !== "pending" && run.status !== "running") {
     throw new McpError("E_STATE_INVALID", `review run "${run.id}" is ${run.status}; cannot submit`);
@@ -99,7 +106,7 @@ export async function persistReviewSubmission(args: PersistArgs): Promise<Persis
   const now = Date.now();
   const ts = isoCompactNow(new Date(now));
   const reportPath = join(reportsDir, `stage-${run.stage}-${ts}.md`);
-  await writeFile(reportPath, renderReport(run, submission, merged), "utf8");
+  await writeFile(reportPath, renderReport(run, submission, merged, provenance), "utf8");
 
   if (existsSync(runDir)) {
     await writeFile(join(runDir, "carry-forward.yaml"), renderYaml(merged), "utf8");
@@ -156,6 +163,7 @@ export function renderReport(
   run: { id: string; type: string; stage: number },
   submit: Submission,
   cf: CarryForward,
+  provenance?: Provenance,
 ): string {
   const parts: string[] = [];
   parts.push("---");
@@ -165,6 +173,18 @@ export function renderReport(
   parts.push(`verdict: ${submit.verdict}`);
   parts.push(`run_id: ${run.id}`);
   parts.push(`created_at: ${new Date().toISOString()}`);
+  if (provenance) {
+    // Indented YAML so it nests under `provenance:` cleanly.
+    parts.push(`provenance:`);
+    parts.push(`  tool: ${provenance.tool}`);
+    parts.push(`  phase: ${provenance.phase}`);
+    parts.push(`  model: ${provenance.model}`);
+    parts.push(`  endpoint: ${provenance.endpoint}`);
+    parts.push(`  generated_at: ${provenance.generated_at}`);
+    if (provenance.fallback_used !== undefined) {
+      parts.push(`  fallback_used: ${provenance.fallback_used}`);
+    }
+  }
   parts.push("---");
   parts.push("");
   parts.push(`# ${run.type} — Stage ${run.stage} — ${submit.verdict}`);

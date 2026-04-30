@@ -155,7 +155,7 @@ describe("#25 item 9 — cycle_status", () => {
     projectDb
       .prepare(
         `INSERT INTO builds (target, started_at, finished_at, status, output_path)
-         VALUES ('ship_build:tarball', ?, ?, 'success', NULL)`,
+         VALUES ('ship:tarball', ?, ?, 'success', NULL)`,
       )
       .run(now - 1000, now);
 
@@ -172,7 +172,7 @@ describe("#25 item 9 — cycle_status", () => {
     projectDb
       .prepare(
         `INSERT INTO builds (target, started_at, finished_at, status, output_path)
-         VALUES ('ship_build:tarball', ?, ?, 'success', NULL)`,
+         VALUES ('ship:tarball', ?, ?, 'success', NULL)`,
       )
       .run(buildTs - 100, buildTs);
     globalDb
@@ -224,9 +224,9 @@ describe("#25 item 7 — spec status transition enforcement", () => {
       "Enough content here to clear the 64-char minimum on spec_save's content.",
     ].join("\n");
 
-  it("bypasses illegal transition only when force=true", async () => {
+  it("illegal transition is always rejected (force=true does not bypass E_STATE_INVALID)", async () => {
     const { client } = await bootGlobal(workRoot, home);
-    // First save: status=accepted (draft→accepted is legal).
+    // First save: status=accepted (new file, no prior — succeeds).
     const r1 = parseResult(
       await client.callTool({
         name: "spec_save",
@@ -237,13 +237,41 @@ describe("#25 item 7 — spec status transition enforcement", () => {
       }),
     );
     expect(r1.ok).toBe(true);
-    // Second save: status=draft — illegal from accepted; force=true bypasses.
+    // Second save: accepted→draft is illegal; force=true does NOT bypass E_STATE_INVALID.
     const r2 = parseResult(
       await client.callTool({
         name: "spec_save",
         arguments: {
           slug: "my-thing",
           content: specBody("My Thing", "draft"),
+          force: true,
+        },
+      }),
+    );
+    expect(r2.ok).toBe(false);
+    expect(r2.code).toBe("E_STATE_INVALID");
+  });
+
+  it("force=true allows overwriting a file when transition is legal", async () => {
+    const { client } = await bootGlobal(workRoot, home);
+    // First save: draft (new file).
+    const r1 = parseResult(
+      await client.callTool({
+        name: "spec_save",
+        arguments: {
+          slug: "legal-force",
+          content: specBody("Legal Force", "draft"),
+        },
+      }),
+    );
+    expect(r1.ok).toBe(true);
+    // Second save: draft→accepted is legal; force=true allows the overwrite.
+    const r2 = parseResult(
+      await client.callTool({
+        name: "spec_save",
+        arguments: {
+          slug: "legal-force",
+          content: specBody("Legal Force", "accepted"),
           force: true,
         },
       }),
@@ -324,11 +352,7 @@ describe("#25 item 2 — related_specs frontmatter available", () => {
   });
 
   it("the shipped spec template documents related_specs", async () => {
-    const tplPath = join(
-      process.cwd(),
-      "templates",
-      "spec-template.md.tpl",
-    );
+    const tplPath = join(process.cwd(), "templates", "spec-template.md.tpl");
     const body = await readFile(tplPath, "utf8");
     expect(body).toContain("related_specs");
   });
@@ -353,10 +377,15 @@ describe("#25 item 3 — plan_save force-backup prior trio", () => {
     await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
   });
 
-  it("backs up the prior trio under backups_dir/.plan-backups before overwriting", async () => {
+  it("backs up the prior quartet under backups_dir/.plan-backups before overwriting", async () => {
     const { client } = await bootProject(workRoot, home, projectDir);
-    const planV1 = "# plan v1\n\n" + "One paragraph that's long enough to meet the 64-char minimum on plan body.\n";
-    const planV2 = "# plan v2\n\n" + "A second paragraph that also meets the 64-char minimum comfortably.\n";
+    const charterV1 =
+      "# Charter v1\n\nProblem: do the thing v1. Success: it's done. Constraints: none. Out of scope: nothing. Decisions: TypeScript.\n";
+    const planV1 =
+      "# plan v1\n\n" +
+      "One paragraph that's long enough to meet the 64-char minimum on plan body.\n";
+    const planV2 =
+      "# plan v2\n\n" + "A second paragraph that also meets the 64-char minimum comfortably.\n";
 
     // First save.
     const r1 = parseResult(
@@ -364,6 +393,7 @@ describe("#25 item 3 — plan_save force-backup prior trio", () => {
         name: "plan_save",
         arguments: {
           name: "example",
+          charter: charterV1,
           plan: planV1,
           todo: "- do the thing\n- then do the next thing\n",
           manifest: "## files\n- `src/thing.ts` new\n",
@@ -378,6 +408,8 @@ describe("#25 item 3 — plan_save force-backup prior trio", () => {
         name: "plan_save",
         arguments: {
           name: "example",
+          charter:
+            "# Charter v2\n\nProblem: do the thing v2. Success: it's done better. Constraints: none. Out of scope: nothing. Decisions: TypeScript.\n",
           plan: planV2,
           todo: "- revised todo list here\n",
           manifest: "## files\n- `src/thing.ts` revised\n",
@@ -395,6 +427,8 @@ describe("#25 item 3 — plan_save force-backup prior trio", () => {
     expect(backup).toBeDefined();
     const priorPlan = await readFile(join(bkRoot, backup!, "example-plan.md"), "utf8");
     expect(priorPlan).toContain("plan v1");
+    const priorCharter = await readFile(join(bkRoot, backup!, "example-charter.md"), "utf8");
+    expect(priorCharter).toContain("Charter v1");
   });
 });
 
@@ -422,11 +456,7 @@ describe("#25 item 4 — audit.personal_data.allow_list suppresses email warning
     // Post-fix: ship_audit scans .md files (README, CONTRIBUTORS, etc.),
     // so README.md is the canonical place for this leak. Also drop a copy
     // in a .yaml to confirm the allow-list applies across file types.
-    await writeFile(
-      join(projectDir, "README.md"),
-      `# Demo\n\nMaintainer: ${email}\n`,
-      "utf8",
-    );
+    await writeFile(join(projectDir, "README.md"), `# Demo\n\nMaintainer: ${email}\n`, "utf8");
     await writeFile(
       join(projectDir, "contacts.yaml"),
       `owner: Kaelith\ncontact: ${email}\n`,
@@ -451,7 +481,9 @@ describe("#25 item 4 — audit.personal_data.allow_list suppresses email warning
       expect(pd!.findings.some((f) => f.detail.includes(email))).toBe(true);
       // Post-fix: the README.md hit should be present too.
       expect(
-        pd!.findings.some((f) => f.detail.includes(email) && /README\.md$/.test((f as { file: string }).file)),
+        pd!.findings.some(
+          (f) => f.detail.includes(email) && /README\.md$/.test((f as { file: string }).file),
+        ),
       ).toBe(true);
       closeTrackedDbs();
     }
@@ -492,9 +524,7 @@ describe("#25 items 5+6 — ship.strict_chain + version_check", () => {
     await mkdir(projectDir, { recursive: true });
     // Reset ship_release's in-memory confirm-token store so previous test
     // runs don't bleed into this one.
-    const { __resetShipReleaseStoreForTests } = await import(
-      "../../src/tools/ship_release.js"
-    );
+    const { __resetShipReleaseStoreForTests } = await import("../../src/tools/ship_release.js");
     __resetShipReleaseStoreForTests();
   });
   afterEach(async () => {
@@ -713,10 +743,7 @@ describe("#25 item 1 — vcf reindex --ideas CLI", () => {
     // Seed: one idea file on disk that has no row in the DB, and one row in
     // the DB whose file doesn't exist.
     const onDiskFile = join(workRoot, "ideas", "2026-04-23-newidea.md");
-    await writeFile(
-      onDiskFile,
-      "---\ntitle: New Idea\ntags: [fresh]\n---\n# Body\n",
-    );
+    await writeFile(onDiskFile, "---\ntitle: New Idea\ntags: [fresh]\n---\n# Body\n");
 
     const globalDb = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
     globalDb
@@ -724,13 +751,7 @@ describe("#25 item 1 — vcf reindex --ideas CLI", () => {
         `INSERT INTO ideas (path, slug, tags, created_at, frontmatter_json)
          VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(
-        join(workRoot, "ideas", "ghost.md"),
-        "ghost",
-        "[]",
-        Date.now(),
-        "{}",
-      );
+      .run(join(workRoot, "ideas", "ghost.md"), "ghost", "[]", Date.now(), "{}");
     globalDb.close();
 
     const res = spawnSync("node", [CLI, "reindex", "--ideas"], {
@@ -742,9 +763,10 @@ describe("#25 item 1 — vcf reindex --ideas CLI", () => {
 
     // Verify: orphan row deleted, new row inserted.
     const db = openGlobalDb({ path: join(home, ".vcf", "vcf.db") });
-    const rows = db
-      .prepare("SELECT path, slug FROM ideas ORDER BY path")
-      .all() as Array<{ path: string; slug: string }>;
+    const rows = db.prepare("SELECT path, slug FROM ideas ORDER BY path").all() as Array<{
+      path: string;
+      slug: string;
+    }>;
     const paths = rows.map((r) => r.path);
     expect(paths).not.toContain(join(workRoot, "ideas", "ghost.md"));
     expect(paths).toContain(onDiskFile);

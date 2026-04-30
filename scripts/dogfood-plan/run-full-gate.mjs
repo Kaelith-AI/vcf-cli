@@ -140,7 +140,9 @@ async function main() {
     const r = await runStage(type, s, endpoint, modelId, diffRef);
     results.push(r);
     if (!r.ok) {
-      process.stderr.write(`\n${type} stage ${s} FAILED at ${r.step}: ${JSON.stringify(r.error).slice(0, 400)}\n`);
+      process.stderr.write(
+        `\n${type} stage ${s} FAILED at ${r.step}: ${JSON.stringify(r.error).slice(0, 400)}\n`,
+      );
       break;
     }
     process.stderr.write(`[${type} stage ${s} @${modelId}] ${r.verdict}\n`);

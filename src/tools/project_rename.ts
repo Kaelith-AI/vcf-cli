@@ -10,11 +10,7 @@ import { renameProject, RenameProjectError } from "../project/rename.js";
 
 const ProjectRenameInput = z
   .object({
-    slug: z
-      .string()
-      .min(1)
-      .max(128)
-      .describe("current registered project slug"),
+    slug: z.string().min(1).max(128).describe("current registered project slug"),
     new_name: z
       .string()
       .min(1)

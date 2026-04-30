@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { readFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { err, log, loadConfigOrExit } from "./_shared.js";
+import { assertApiEndpoint } from "../util/endpointKind.js";
 
 export async function runEmbedKb(opts: { only?: string; force?: boolean }): Promise<void> {
   const config = await loadConfigOrExit();
@@ -19,10 +20,11 @@ export async function runEmbedKb(opts: { only?: string; force?: boolean }): Prom
       2,
     );
   }
-  const endpoint = config.endpoints.find((e) => e.name === config.embeddings!.endpoint);
-  if (!endpoint) {
+  const endpointRaw = config.endpoints.find((e) => e.name === config.embeddings!.endpoint);
+  if (!endpointRaw) {
     err(`embeddings.endpoint '${config.embeddings!.endpoint}' missing from endpoints[]`, 2);
   }
+  const endpoint = assertApiEndpoint(endpointRaw);
   const kbRoot = config.kb.root;
   const { loadKb } = await import("../primers/load.js");
   const entries = await loadKb(kbRoot);
@@ -47,9 +49,7 @@ export async function runEmbedKb(opts: { only?: string; force?: boolean }): Prom
   await mkdir(cacheDir, { recursive: true });
 
   const { callEmbeddings, LlmError } = await import("../util/llmClient.js");
-  const { buildEmbeddingInput, writeEmbeddingRecord, sha256 } = await import(
-    "../primers/embed.js"
-  );
+  const { buildEmbeddingInput, writeEmbeddingRecord, sha256 } = await import("../primers/embed.js");
 
   log(
     `embed-kb: ${filtered.length} entr(y|ies) via ${endpoint.name} (model=${config.embeddings!.model})`,

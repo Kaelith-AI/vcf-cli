@@ -56,10 +56,7 @@ export function registerTestAddMissingCase(server: McpServer, deps: ServerDeps):
       return runTool(
         async () => {
           if (!deps.projectDb) {
-            throw new McpError(
-              "E_STATE_INVALID",
-              "test_add_missing_case requires project scope",
-            );
+            throw new McpError("E_STATE_INVALID", "test_add_missing_case requires project scope");
           }
           const parsed = TestAddMissingCaseInput.parse(args);
           const projectRoot = readProjectRoot(deps);
@@ -96,25 +93,26 @@ export function registerTestAddMissingCase(server: McpServer, deps: ServerDeps):
             testFiles,
           });
 
-          return success([planPath, manifestPath, todoPath], `Proposed missing-case scaffold for ${planName}`, {
-            ...(parsed.expand
-              ? {
-                  content: {
-                    plan_name: planName,
-                    plan_path: planPath,
-                    manifest_path: manifestPath,
-                    todo_path: todoPath,
-                    specs_dir: deps.config.workspace.specs_dir,
-                    test_file_count: testFiles.length,
-                    test_files: testFiles,
-                    scaffolding_prompt: prompt,
-                  },
-                }
-              : {
-                  expand_hint:
-                    "Pass expand=true for the scaffolding prompt + full test-file inventory.",
-                }),
-          });
+          return success(
+            [planPath, manifestPath, todoPath],
+            `Proposed missing-case scaffold for ${planName}`,
+            {
+              ...(parsed.expand
+                ? {
+                    content: {
+                      plan_name: planName,
+                      plan_path: planPath,
+                      manifest_path: manifestPath,
+                      todo_path: todoPath,
+                      specs_dir: deps.config.workspace.specs_dir,
+                      test_file_count: testFiles.length,
+                      test_files: testFiles,
+                      scaffolding_prompt: prompt,
+                    },
+                  }
+                : {}),
+            },
+          );
         },
         (payload) => {
           writeAudit(deps.globalDb, {
@@ -206,6 +204,23 @@ function buildPrompt(opts: PromptOpts): string {
     `- **Respect prior \`accepted_risk\` entries in the response log.** A`,
     `  case the operator explicitly accepted as untested is not a missing`,
     `  case; it's a closed one.`,
+    ``,
+    `## Provenance`,
+    ``,
+    `When proposing test stubs that the operator may eventually accept and`,
+    `run through \`test_generate\`, prepend each proposal's file body with a`,
+    `provenance block in the test file's header comment (or YAML frontmatter`,
+    `if the file format supports it):`,
+    ``,
+    `\`\`\`text`,
+    `// provenance: tool=test_add_missing_case phase=test-propose`,
+    `//             model=<exact id> endpoint=claude-code-main`,
+    `//             generated_at=<ISO 8601>`,
+    `\`\`\``,
+    ``,
+    `Future review of why a stub exists ("why was this test added?") needs to`,
+    `know which model proposed it. Ask the operator if you don't know your`,
+    `exact model id.`,
   ].join("\n");
 }
 
@@ -236,9 +251,7 @@ function walk(dir: string, projectRoot: string, out: string[]): void {
     }
     if (s.isDirectory()) {
       walk(full, projectRoot, out);
-    } else if (
-      /(\.test|\.spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|rb|java|kt|swift)$/.test(name)
-    ) {
+    } else if (/(\.test|\.spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|rb|java|kt|swift)$/.test(name)) {
       out.push(relative(projectRoot, full));
     }
   }

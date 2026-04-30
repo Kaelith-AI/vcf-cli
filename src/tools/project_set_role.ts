@@ -13,14 +13,12 @@ import { setProjectRole } from "../util/projectRegistry.js";
 
 const ProjectSetRoleInput = z
   .object({
-    slug: z
-      .string()
-      .min(1)
-      .max(128)
-      .describe("registered project slug"),
+    slug: z.string().min(1).max(128).describe("registered project slug"),
     role: z
       .enum(["standard", "pm"])
-      .describe("'pm' unlocks cross-project admin tools in that project's sessions; 'standard' is the default"),
+      .describe(
+        "'pm' unlocks cross-project admin tools in that project's sessions; 'standard' is the default",
+      ),
     expand: z.boolean().default(false),
   })
   .strict();
@@ -42,16 +40,11 @@ export function registerProjectSetRole(server: McpServer, deps: ServerDeps): voi
           const parsed = ProjectSetRoleInput.parse(args);
           const changed = setProjectRole(deps.globalDb, parsed.slug, parsed.role);
           if (!changed) {
-            throw new McpError(
-              "E_NOT_FOUND",
-              `no registered project with slug '${parsed.slug}'`,
-            );
+            throw new McpError("E_NOT_FOUND", `no registered project with slug '${parsed.slug}'`);
           }
           const summary = `Set project '${parsed.slug}' role to '${parsed.role}'.`;
           return success([], summary, {
-            ...(parsed.expand
-              ? { content: { slug: parsed.slug, role: parsed.role } }
-              : {}),
+            ...(parsed.expand ? { content: { slug: parsed.slug, role: parsed.role } } : {}),
           });
         },
         (payload) => {

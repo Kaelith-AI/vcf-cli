@@ -276,6 +276,11 @@ describe("e2e: full lifecycle", () => {
           name: "plan_save",
           arguments: {
             name: "scraper",
+            charter:
+              "# Charter\n\nProblem: scrape the web. Success: data is scraped. Constraints: no memory leaks. Out of scope: UI. Decisions: TypeScript, MCP.".padEnd(
+                120,
+                " ",
+              ),
             plan: "# Plan\n\nPhase 1: config + loader. Phase 2: scraper. Phase 3: digest.".padEnd(
               120,
               " ",

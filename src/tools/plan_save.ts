@@ -1,8 +1,8 @@
 // plan_save — project scope.
 //
-// Persist the three plan artifacts (plan, todo, manifest) to
-// <project>/plans/<name>-{plan,todo,manifest}.md and transition the project
-// state to 'planning' (or 'building' if explicitly requested). Writes
+// Persist the four plan artifacts (plan, todo, manifest, charter) to
+// <project>/plans/<name>-{plan,todo,manifest,charter}.md and transition the
+// project state to 'planning' (or 'building' if explicitly requested). Writes
 // artifact rows into project.db for the indexer.
 //
 // force=false (default) refuses to overwrite existing files so a re-plan
@@ -31,6 +31,13 @@ const PlanSaveInput = z
     plan: z.string().min(64).max(400_000).describe("narrative plan markdown"),
     todo: z.string().min(16).max(200_000).describe("flat imperative todo list markdown"),
     manifest: z.string().min(16).max(200_000).describe("file-by-file manifest markdown"),
+    charter: z
+      .string()
+      .min(64)
+      .max(200_000)
+      .describe(
+        "frozen statement of project intent: problem, success criteria, hard constraints, out-of-scope, locked design decisions",
+      ),
     advance_state: z
       .enum(["planning", "building"])
       .default("planning")
@@ -46,7 +53,7 @@ export function registerPlanSave(server: McpServer, deps: ServerDeps): void {
     {
       title: "Save Plan",
       description:
-        "Persist plan, todo, manifest to plans/<name>-*.md; index in project.db.artifacts; advance project.state (planning|building).",
+        "Persist plan, charter, todo, manifest to plans/<name>-*.md; index in project.db.artifacts; advance project.state (planning|building).",
       inputSchema: PlanSaveInput.shape,
     },
     async (args: z.infer<typeof PlanSaveInput>) => {
@@ -64,6 +71,7 @@ export function registerPlanSave(server: McpServer, deps: ServerDeps): void {
             plan: `<${parsed.plan.length} chars>`,
             todo: `<${parsed.todo.length} chars>`,
             manifest: `<${parsed.manifest.length} chars>`,
+            charter: `<${parsed.charter.length} chars>`,
           };
           const projectRoot = readProjectRoot(deps);
           if (!projectRoot) {
@@ -74,6 +82,7 @@ export function registerPlanSave(server: McpServer, deps: ServerDeps): void {
           await mkdir(plansDir, { recursive: true });
 
           const targets: Array<[string, string]> = [
+            [join(plansDir, `${parsed.name}-charter.md`), parsed.charter],
             [join(plansDir, `${parsed.name}-plan.md`), parsed.plan],
             [join(plansDir, `${parsed.name}-todo.md`), parsed.todo],
             [join(plansDir, `${parsed.name}-manifest.md`), parsed.manifest],
@@ -138,15 +147,28 @@ export function registerPlanSave(server: McpServer, deps: ServerDeps): void {
             /* non-fatal */
           }
 
+          const compactDirective = [
+            `Planning complete. 4 artifacts saved: plan, charter, manifest, todo.`,
+            ``,
+            `---`,
+            `COMPACT NOW — then paste this to resume:`,
+            ``,
+            `We're working on ${parsed.name}. Read the plan, charter, manifest, and todo list in the plans/ folder and begin on phase 1.`,
+            `---`,
+          ].join("\n");
+
           return success(
             written,
-            `Saved plan "${parsed.name}" (3 files) and advanced project state → ${parsed.advance_state}.${backupDir ? ` Prior trio backed up to ${backupDir}` : ""}`,
+            `Saved plan "${parsed.name}" (4 files) and advanced project state → ${parsed.advance_state}.${backupDir ? ` Prior quartet backed up to ${backupDir}` : ""}\n\n${compactDirective}`,
             parsed.expand
-              ? { content: { written, state: parsed.advance_state, backed_up_to: backupDir ?? undefined } }
-              : {
-                  expand_hint:
-                    "Call plan_save with expand=true to receive the file list + new state.",
-                },
+              ? {
+                  content: {
+                    written,
+                    state: parsed.advance_state,
+                    backed_up_to: backupDir ?? undefined,
+                  },
+                }
+              : {},
           );
         },
         (payload) => {
@@ -174,6 +196,7 @@ async function exists(p: string): Promise<boolean> {
 }
 
 function kindOf(p: string): string {
+  if (p.endsWith("-charter.md")) return "charter";
   if (p.endsWith("-plan.md")) return "plan";
   if (p.endsWith("-todo.md")) return "todo";
   if (p.endsWith("-manifest.md")) return "manifest";

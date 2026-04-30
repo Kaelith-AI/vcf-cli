@@ -4,10 +4,7 @@ import { resolve as resolvePath } from "node:path";
 import { existsSync } from "node:fs";
 import { openGlobalDb } from "../db/global.js";
 import { loadConfig } from "../config/loader.js";
-import {
-  discoverLegacyProjects,
-  migrateProject03to05,
-} from "../project/migrate03.js";
+import { discoverLegacyProjects, migrateProject03to05 } from "../project/migrate03.js";
 import { log, vcfHomeDir } from "./_shared.js";
 
 export async function runMigrate03(opts: {

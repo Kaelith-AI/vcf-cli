@@ -106,9 +106,9 @@ export function drainLegacyLessonsFeedback(projectDb: DatabaseSync): void {
   const hasFeedback = tableExists(projectDb, "feedback");
   if (!hasLessons && !hasFeedback) return;
 
-  const projectRow = projectDb
-    .prepare("SELECT root_path FROM project WHERE id=1")
-    .get() as { root_path?: string } | undefined;
+  const projectRow = projectDb.prepare("SELECT root_path FROM project WHERE id=1").get() as
+    | { root_path?: string }
+    | undefined;
   const projectRoot = projectRow?.root_path;
   if (!projectRoot) return; // malformed project DB; nothing safe to drain
 

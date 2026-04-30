@@ -33,13 +33,14 @@ import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
 import { writeAudit, redact } from "../util/audit.js";
 import { McpError } from "../errors.js";
-import { callChatCompletion, LlmError, type ChatMessage } from "../util/llmClient.js";
+import { callChatCompletionWithFallback, LlmError, type ChatMessage } from "../util/llmClient.js";
 import { persistReviewSubmission, type ReviewRunRow } from "../review/submitCore.js";
 import { resolveOutputs } from "../util/outputs.js";
 import { readOverlayBundle, type ReviewType } from "../review/overlays.js";
 import { projectRunsDir } from "../project/stateDir.js";
 import { composeMessages, parseSubmission } from "../review/prompt.js";
-import { resolveReviewEndpoint } from "../review/endpointResolve.js";
+import { resolveReviewEndpoint, buildBackupRequest } from "../review/endpointResolve.js";
+import { buildProvenance } from "../util/provenance.js";
 
 const ReviewExecuteInput = z
   .object({
@@ -160,18 +161,21 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
           // neither need nor validate — closes the security/stage-7 finding
           // from the 2026-04-21 dogfood review.
           const providerOptions = endpoint.provider_options as Record<string, unknown> | undefined;
+          const primaryReq = {
+            baseUrl: endpoint.base_url,
+            apiKey,
+            model: modelId,
+            messages: redactedMessages,
+            temperature: 0.1,
+            jsonResponse: true,
+            ...(providerOptions ? { providerOptions } : {}),
+            signal: ctrl.signal,
+          };
+          const backupReq = buildBackupRequest(deps.config, "review", primaryReq);
           let content: string;
+          let usedBackup = false;
           try {
-            content = await callChatCompletion({
-              baseUrl: endpoint.base_url,
-              apiKey,
-              model: modelId,
-              messages: redactedMessages,
-              temperature: 0.1,
-              jsonResponse: true,
-              ...(providerOptions ? { providerOptions } : {}),
-              signal: ctrl.signal,
-            });
+            ({ content, usedBackup } = await callChatCompletionWithFallback(primaryReq, backupReq));
           } catch (e) {
             if (e instanceof LlmError) {
               if (e.kind === "canceled") {
@@ -195,6 +199,20 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
           // Parse structured verdict from the response.
           const submission = parseSubmission(content);
 
+          const usedEndpointName = usedBackup
+            ? (deps.config.defaults?.review?.backup_endpoint ?? endpoint.name)
+            : endpoint.name;
+          const usedModel = usedBackup
+            ? (deps.config.defaults?.review?.backup_model ?? modelId)
+            : modelId;
+          const provenance = buildProvenance({
+            tool: "review_execute",
+            phase: "review-execute",
+            model: usedModel,
+            endpoint: usedEndpointName,
+            fallback_used: usedBackup,
+          });
+
           const outputs = resolveOutputs(root, deps.config);
           const { reportPath, merged } = await persistReviewSubmission({
             projectDb: deps.projectDb,
@@ -203,6 +221,7 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
             runDir,
             run,
             submission,
+            provenance,
           });
 
           // Audit shape: deliberately omit message content + response body.
@@ -219,9 +238,10 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
             report_path: reportPath,
           };
 
+          const backupNote = usedBackup ? " [primary failed — used backup endpoint]" : "";
           return success(
             [reportPath],
-            `review_execute: ${run.type} stage ${run.stage} verdict=${submission.verdict} (endpoint=${endpoint.name}, model=${modelId}, overlay=${overlay.overlayMatch}).`,
+            `review_execute: ${run.type} stage ${run.stage} verdict=${submission.verdict} (endpoint=${endpoint.name}, model=${modelId}, overlay=${overlay.overlayMatch})${backupNote}.`,
             parsed.expand
               ? {
                   content: {
@@ -238,7 +258,7 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
                     carry_forward: merged,
                   },
                 }
-              : { expand_hint: "Call review_execute with expand=true for the content payload." },
+              : {},
           );
         },
         (payload) => {

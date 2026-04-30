@@ -163,9 +163,7 @@ export interface RestoreResult {
 function listArchive(archive: string): string[] {
   const res = spawnSync("tar", ["-tzf", archive], { encoding: "utf8" });
   if (res.status !== 0) {
-    throw new Error(
-      `tar -tzf failed: ${res.stderr?.trim() || "(no stderr)"} (archive=${archive})`,
-    );
+    throw new Error(`tar -tzf failed: ${res.stderr?.trim() || "(no stderr)"} (archive=${archive})`);
   }
   return res.stdout
     .split("\n")
@@ -187,11 +185,7 @@ function extractArchive(archive: string, dest: string): void {
  * (projects/, kb/, kb-ancestors/). Sub-entries inside projects/ are
  * per-slug state-dirs and get individual conflict handling.
  */
-function buildPlan(
-  stagingDir: string,
-  targetDir: string,
-  replace: boolean,
-): RestorePlanEntry[] {
+function buildPlan(stagingDir: string, targetDir: string, replace: boolean): RestorePlanEntry[] {
   const plan: RestorePlanEntry[] = [];
   const topEntries = readdirSync(stagingDir);
   for (const name of topEntries) {

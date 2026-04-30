@@ -271,7 +271,10 @@ describe("lifecycle_report perf @ 10k audit rows", () => {
     const result = await runNarrativeCore({ config, parsed, report, fetchImpl: mockFetch });
     const elapsed = performance.now() - t0;
     expect(elapsed).toBeLessThan(60_000);
-    expect(result.markdown).toContain("generated_by");
+    // Provenance frontmatter at top of markdown (replaced legacy "generated_by" footer).
+    expect(result.markdown).toContain("provenance:");
+    expect(result.markdown).toContain("tool: lifecycle_report");
+    expect(result.markdown).toContain("phase: lifecycle-narrative");
     expect(result.markdown).toContain("mock");
   });
 });

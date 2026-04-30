@@ -9,7 +9,10 @@ export async function runBackup(opts: {
   include: string;
   format: string;
 }): Promise<void> {
-  const subsetsRaw = opts.include.split(",").map((s) => s.trim()).filter(Boolean);
+  const subsetsRaw = opts.include
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
   const allowed = new Set(["projects", "global", "kb", "all"]);
   const invalid = subsetsRaw.filter((s) => !allowed.has(s));
   if (invalid.length > 0) {
@@ -49,11 +52,7 @@ export async function runRestore(
   }
   for (const entry of result.plan) {
     const tag =
-      entry.action === "copy"
-        ? "copy    "
-        : entry.action === "replace"
-          ? "replace "
-          : "skip    ";
+      entry.action === "copy" ? "copy    " : entry.action === "replace" ? "replace " : "skip    ";
     process.stderr.write(
       `${tag}${entry.relative_path}${entry.reason ? `  (${entry.reason})` : ""}\n`,
     );

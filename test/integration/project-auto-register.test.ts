@@ -161,11 +161,17 @@ describe("auto-registration in project_init + state mirror in plan_save", () => 
     ].join("\n");
     const todo = "- [ ] do the thing properly";
     const manifest = "- src/file.ts: the thing we are building";
+    const charter =
+      "# Charter\n\nProblem: do the thing. Success: it is done. Constraints: none. Out of scope: nothing. Decisions: TypeScript.".padEnd(
+        120,
+        " ",
+      );
     const env = parseResult(
       await client.callTool({
         name: "plan_save",
         arguments: {
           name: "m1",
+          charter,
           plan,
           todo,
           manifest,

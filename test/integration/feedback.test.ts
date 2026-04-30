@@ -102,12 +102,22 @@ describe("feedback_add + feedback_list (global-only, #41)", () => {
     await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
   });
 
-  function readGlobalFeedback(id: number): { note: string; stage: string | null; urgency: string | null; project_root: string } {
+  function readGlobalFeedback(id: number): {
+    note: string;
+    stage: string | null;
+    urgency: string | null;
+    project_root: string;
+  } {
     const db = openGlobalLessonsDb({ path: lessonsDbPath });
     try {
       const row = db
         .prepare("SELECT note, stage, urgency, project_root FROM feedback WHERE id = ?")
-        .get(id) as { note: string; stage: string | null; urgency: string | null; project_root: string };
+        .get(id) as {
+        note: string;
+        stage: string | null;
+        urgency: string | null;
+        project_root: string;
+      };
       return row;
     } finally {
       db.close();
@@ -193,9 +203,11 @@ describe("feedback_add + feedback_list (global-only, #41)", () => {
     // Inject a foreign-project row directly into the global store.
     const db = openGlobalLessonsDb({ path: lessonsDbPath });
     try {
-      db.prepare(
-        `INSERT INTO feedback (project_root, note, created_at) VALUES (?, ?, ?)`,
-      ).run("/other/project", "not mine", Date.now());
+      db.prepare(`INSERT INTO feedback (project_root, note, created_at) VALUES (?, ?, ?)`).run(
+        "/other/project",
+        "not mine",
+        Date.now(),
+      );
     } finally {
       db.close();
     }

@@ -42,3 +42,23 @@ export function projectDbPath(slug: string, home?: string | undefined): string {
 export function projectRunsDir(slug: string, home?: string | undefined): string {
   return join(projectStateDir(slug, home), "review-runs");
 }
+
+/**
+ * Absolute path to `~/.vcf/kb-drafts/` — staging area for in-progress KB
+ * entries produced by `research_compose`. Global (not per-project): drafts
+ * exist outside any project trust boundary until the operator promotes
+ * them into the live KB.
+ */
+export function kbDraftsDir(home?: string | undefined): string {
+  return join(home ?? vcfHome(), ".vcf", "kb-drafts");
+}
+
+/**
+ * Absolute path to `~/.vcf/secrets.env` — VCF-managed dotenv file for
+ * provider API keys. Loaded into `process.env` at vcf-mcp boot; explicit
+ * env vars still win. Operators create / edit this file directly; VCF
+ * code never writes it.
+ */
+export function secretsEnvPath(home?: string | undefined): string {
+  return join(home ?? vcfHome(), ".vcf", "secrets.env");
+}

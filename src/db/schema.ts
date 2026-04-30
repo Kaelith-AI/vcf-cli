@@ -159,6 +159,28 @@ export const GLOBAL_MIGRATIONS: Migration[] = [
     `,
   },
   {
+    version: 7,
+    name: "ideas_fts",
+    up: `
+      -- Phase G-D: body text indexing for ideas. body_text holds the
+      -- markdown content after the closing frontmatter delimiter so
+      -- idea_search can match against body content, not just frontmatter.
+      -- The FTS5 virtual table is a standalone table (no content= mirror)
+      -- because the ideas table stores title/context inside frontmatter_json,
+      -- not as separate columns. idea_capture and reindex --ideas write to
+      -- both tables; they are kept in sync by the application layer.
+      ALTER TABLE ideas ADD COLUMN body_text TEXT NOT NULL DEFAULT '';
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS ideas_fts USING fts5(
+        slug,
+        title,
+        context,
+        tags,
+        body_text
+      );
+    `,
+  },
+  {
     version: 6,
     name: "test_runs",
     up: `

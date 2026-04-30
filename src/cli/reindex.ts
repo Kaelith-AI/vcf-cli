@@ -31,10 +31,7 @@ export async function runReindex(opts: { project?: string; ideas?: boolean }): P
   const project = findProjectForCwd(globalDb, target);
   globalDb.close();
   if (!project) {
-    err(
-      `no registered VCF project at or above ${target} — run 'vcf init' or 'vcf adopt' first`,
-      2,
-    );
+    err(`no registered VCF project at or above ${target} — run 'vcf init' or 'vcf adopt' first`, 2);
   }
   const dbPath = projectDbPath(project!.name);
   if (!existsSync(dbPath)) {
@@ -133,9 +130,10 @@ async function runReindexIdeas(): Promise<void> {
   }
 
   // Fetch all indexed paths from the DB.
-  const indexed = globalDb
-    .prepare("SELECT path, slug FROM ideas")
-    .all() as Array<{ path: string; slug: string }>;
+  const indexed = globalDb.prepare("SELECT path, slug FROM ideas").all() as Array<{
+    path: string;
+    slug: string;
+  }>;
   const indexedPaths = new Set(indexed.map((r) => r.path));
 
   // Delete orphaned rows (file gone).
@@ -147,37 +145,71 @@ async function runReindexIdeas(): Promise<void> {
     }
   }
 
-  // Insert missing rows (file exists but not indexed).
+  // Insert or update rows, including body_text for FTS.
   let added = 0;
   for (const filePath of onDisk) {
-    if (!indexedPaths.has(filePath)) {
-      // Derive a slug from the filename: strip dir + .md extension.
-      const fname = filePath.split("/").at(-1) ?? filePath;
-      const slug = fname.replace(/\.md$/, "");
-      // Read frontmatter for tags if available; fall back to empty.
-      let frontmatterJson = "{}";
-      let tags = "[]";
-      try {
-        const body = await readFile(filePath, "utf8");
-        const fm = extractIdeasFrontmatter(body);
-        if (fm) {
-          frontmatterJson = JSON.stringify(fm);
-          if (Array.isArray(fm["tags"])) {
-            tags = JSON.stringify(fm["tags"]);
-          }
+    // Derive a slug from the filename: strip dir + .md extension.
+    const fname = filePath.split("/").at(-1) ?? filePath;
+    const slug = fname.replace(/\.md$/, "");
+    // Read frontmatter for tags if available; fall back to empty.
+    let frontmatterJson = "{}";
+    let tags = "[]";
+    let bodyText = "";
+    let fm: Record<string, unknown> | null = null;
+    try {
+      const rawBody = await readFile(filePath, "utf8");
+      fm = extractIdeasFrontmatter(rawBody);
+      if (fm) {
+        frontmatterJson = JSON.stringify(fm);
+        if (Array.isArray(fm["tags"])) {
+          tags = JSON.stringify(fm["tags"]);
         }
-      } catch {
-        /* non-fatal */
       }
-      const fileStat = await stat(filePath).catch(() => null);
-      const createdAt = fileStat?.mtimeMs ?? Date.now();
+      // Extract body text for FTS indexing.
+      bodyText = extractIdeaBody(rawBody);
+    } catch {
+      /* non-fatal */
+    }
+    const fileStat = await stat(filePath).catch(() => null);
+    const createdAt = fm?.created
+      ? new Date(fm.created as string).getTime()
+      : (fileStat?.mtimeMs ?? Date.now());
+
+    if (!indexedPaths.has(filePath)) {
       globalDb
         .prepare(
-          `INSERT INTO ideas (path, slug, tags, created_at, frontmatter_json)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO ideas (path, slug, tags, created_at, frontmatter_json, body_text)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(filePath, slug, tags, createdAt, frontmatterJson);
+        .run(filePath, slug, tags, createdAt, frontmatterJson, bodyText);
       added++;
+    } else {
+      // Update body_text for existing rows (FTS refresh).
+      globalDb.prepare(`UPDATE ideas SET body_text = ? WHERE path = ?`).run(bodyText, filePath);
+    }
+
+    // Refresh the FTS index for this row — non-fatal if FTS table missing.
+    try {
+      const row = globalDb.prepare("SELECT id FROM ideas WHERE path = ? LIMIT 1").get(filePath) as
+        | { id: number }
+        | undefined;
+      if (row) {
+        globalDb
+          .prepare(
+            `INSERT OR REPLACE INTO ideas_fts(rowid, slug, title, context, tags, body_text)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            row.id,
+            slug,
+            (fm?.["title"] as string) ?? slug,
+            (fm?.["context"] as string) ?? "",
+            tags,
+            bodyText,
+          );
+      }
+    } catch {
+      /* FTS table may not exist on pre-migration DBs — non-fatal */
     }
   }
 
@@ -185,6 +217,17 @@ async function runReindexIdeas(): Promise<void> {
   log(
     `reindex ideas: ${added} added, ${deleted} orphaned rows removed, ${onDisk.size} files on disk in ${ideasDir}`,
   );
+}
+
+/**
+ * Extract body text (everything after the closing frontmatter ---).
+ * Used for FTS body_text indexing during reindex --ideas.
+ */
+function extractIdeaBody(raw: string): string {
+  if (!raw.startsWith("---")) return raw;
+  const frontmatterEnd = raw.indexOf("\n---", 3);
+  if (frontmatterEnd < 0) return "";
+  return raw.slice(frontmatterEnd + 4).trim();
 }
 
 /** Minimal frontmatter extractor for idea files. */
@@ -204,9 +247,7 @@ function extractIdeasFrontmatter(raw: string): Record<string, unknown> | null {
     if (value.startsWith("[") && value.endsWith("]")) {
       const inner = value.slice(1, -1).trim();
       obj[key] =
-        inner.length === 0
-          ? []
-          : inner.split(",").map((s) => s.trim().replace(/^["']|["']$/g, ""));
+        inner.length === 0 ? [] : inner.split(",").map((s) => s.trim().replace(/^["']|["']$/g, ""));
       continue;
     }
     obj[key] = value.replace(/^["']|["']$/g, "");
@@ -224,6 +265,7 @@ export function classifyKind(filePath: string): string {
   // below behave identically on Windows (path.sep='\\') and POSIX.
   const p = filePath.replace(/\\/g, "/");
   if (p.includes("/plans/decisions/")) return "decision";
+  if (p.endsWith("-charter.md")) return "charter";
   if (p.endsWith("-plan.md")) return "plan";
   if (p.endsWith("-todo.md")) return "todo";
   if (p.endsWith("-manifest.md")) return "manifest";

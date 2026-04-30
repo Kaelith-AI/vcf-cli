@@ -70,9 +70,7 @@ export function registerPlanGet(server: McpServer, deps: ServerDeps): void {
             found,
             `Found ${found.length}/3 plan file(s) for "${parsed.name}".`,
             {
-              ...(parsed.expand
-                ? { content: bodies }
-                : { expand_hint: "Call plan_get with expand=true to include the bodies." }),
+              ...(parsed.expand ? { content: bodies } : {}),
             },
           );
           return payload;

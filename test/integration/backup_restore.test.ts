@@ -106,10 +106,7 @@ describe("createBackup / restoreBackup", () => {
     // must choose skip vs overwrite.
     await mkdir(join(targetHome, ".vcf", "projects", "alpha"), { recursive: true });
     await writeFile(join(targetHome, ".vcf", "config.yaml"), "existing\n");
-    await writeFile(
-      join(targetHome, ".vcf", "projects", "alpha", "project.db"),
-      "EXISTING",
-    );
+    await writeFile(join(targetHome, ".vcf", "projects", "alpha", "project.db"), "EXISTING");
     const result = restoreBackup({ archive, homeDir: targetHome });
     expect(result.skipped).toBeGreaterThan(0);
     const cfg = await readFile(join(targetHome, ".vcf", "config.yaml"), "utf8");

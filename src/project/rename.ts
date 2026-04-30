@@ -64,10 +64,7 @@ export async function renameProject(input: RenameProjectInput): Promise<RenamePr
 
   const row = getProjectByName(globalDb, slug);
   if (!row) {
-    throw new RenameProjectError(
-      "E_NOT_FOUND",
-      `no registered project with slug '${slug}'`,
-    );
+    throw new RenameProjectError("E_NOT_FOUND", `no registered project with slug '${slug}'`);
   }
   const collision = getProjectByName(globalDb, newSlug);
   if (collision) {

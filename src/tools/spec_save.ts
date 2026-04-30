@@ -11,7 +11,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { mkdir, writeFile, stat } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
@@ -115,6 +115,14 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
           await assertInsideAllowedRoot(target, deps.config.workspace.allowed_roots);
 
           // Overwrite policy + status-transition enforcement.
+          //
+          // When a prior spec file exists:
+          //   1. Always check whether the status transition is legal (regardless of force).
+          //   2. If the transition is illegal → throw E_STATE_INVALID (no force escape —
+          //      an illegal transition is always an error; force only controls file overwrite).
+          //   3. If the transition is legal but force=false → throw E_ALREADY_EXISTS (use
+          //      force=true to overwrite the file).
+          //   4. If the transition is legal and force=true → proceed.
           let existingContent: string | null = null;
           try {
             const { readFile: readFileFs } = await import("node:fs/promises");
@@ -122,28 +130,29 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
           } catch {
             /* not present */
           }
-          if (existingContent !== null && !parsed.force) {
-            throw new McpError(
-              "E_ALREADY_EXISTS",
-              `${target} already exists — pass force=true to overwrite`,
-            );
-          }
 
-          // Status-transition enforcement (followup #25 item 7).
-          // Allowed: draft→accepted, draft→archived, accepted→archived.
-          // archived is terminal. force=true bypasses (audited below).
           if (existingContent !== null) {
+            // Status-transition enforcement (followup #25 item 7).
+            // Allowed: draft→accepted, draft→archived, accepted→archived.
+            // archived is terminal.
             const priorFm = extractFrontmatter(existingContent);
             const priorStatus = (priorFm?.["status"] as string | undefined) ?? "draft";
             const nextStatus = validated.status;
             if (!isLegalTransition(priorStatus, nextStatus)) {
-              if (!parsed.force) {
-                throw new McpError(
-                  "E_STATE_INVALID",
-                  `illegal spec status transition: ${priorStatus} → ${nextStatus}. Allowed: draft→accepted|archived, accepted→archived. archived is terminal. Pass force=true to override.`,
-                );
-              }
-              // force=true path — will be noted in audit summary below.
+              throw new McpError(
+                "E_STATE_INVALID",
+                `illegal spec status transition: ${priorStatus} → ${nextStatus}. Allowed: draft→accepted|archived, accepted→archived. archived is terminal.`,
+              );
+            }
+            // Transition is legal. Now enforce the overwrite gate.
+            if (!parsed.force) {
+              throw new McpError(
+                "E_ALREADY_EXISTS",
+                `${target} already exists — pass force=true to overwrite`,
+              );
+            }
+            // force=true with a legal transition — note in audit.
+            if (priorStatus !== nextStatus) {
               forcedTransition = `${priorStatus} → ${nextStatus}`;
             }
           }
@@ -186,10 +195,7 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
                     forced_transition: forcedTransition ?? undefined,
                   },
                 }
-              : {
-                  expand_hint:
-                    "Call spec_save with expand=true to receive the normalized frontmatter.",
-                },
+              : {},
           );
           return payload;
         },
@@ -205,6 +211,27 @@ export function registerSpecSave(server: McpServer, deps: ServerDeps): void {
       );
     },
   );
+}
+
+function splitCommaSep(inner: string): string[] {
+  if (inner.length === 0) return [];
+  const items: string[] = [];
+  let current = "";
+  let inQuote = "";
+  for (const ch of inner) {
+    if (!inQuote && (ch === '"' || ch === "'")) {
+      inQuote = ch;
+    } else if (inQuote && ch === inQuote) {
+      inQuote = "";
+    } else if (!inQuote && ch === ",") {
+      items.push(current.trim().replace(/^["']|["']$/g, ""));
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  items.push(current.trim().replace(/^["']|["']$/g, ""));
+  return items;
 }
 
 /** Reuse of the lightweight parser from primers/load.ts (copied to avoid cross-file coupling). */
@@ -223,8 +250,7 @@ function extractFrontmatter(raw: string): Record<string, unknown> | null {
     let value: string = trimmed.slice(colon + 1).trim();
     if (value.startsWith("[") && value.endsWith("]")) {
       const inner = value.slice(1, -1).trim();
-      obj[key] =
-        inner.length === 0 ? [] : inner.split(",").map((s) => s.trim().replace(/^["']|["']$/g, ""));
+      obj[key] = splitCommaSep(inner);
       continue;
     }
     if (

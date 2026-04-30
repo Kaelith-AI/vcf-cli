@@ -23,6 +23,8 @@ import { VERSION } from "./version.js";
 import { log } from "./logger.js";
 import { resolveReporter } from "./telemetry/reporter.js";
 import { recordConfigBoot } from "./util/configBoot.js";
+import { loadSecretsEnv } from "./util/secretsEnv.js";
+import { secretsEnvPath } from "./project/stateDir.js";
 
 async function main(): Promise<void> {
   const program = new Command();
@@ -47,6 +49,36 @@ async function main(): Promise<void> {
   }
 
   const cwd = opts.cwd ? resolvePath(opts.cwd) : process.cwd();
+
+  // Load ~/.vcf/secrets.env BEFORE config — config validation reads env vars
+  // for endpoint auth (E_CONFIG_MISSING_ENV at non-local trust levels).
+  // process.env still wins so explicit overrides keep working for testing.
+  // The file is optional; absent file is fine.
+  const secrets = loadSecretsEnv(secretsEnvPath());
+  if (secrets.fileExists) {
+    if (secrets.permissive) {
+      process.stderr.write(
+        `vcf-mcp: warning: ${secrets.path} mode is ${secrets.mode} — group/world readable. ` +
+          `Run 'chmod 600 ${secrets.path}' to fix.\n`,
+      );
+    }
+    if (secrets.invalid.length > 0) {
+      process.stderr.write(
+        `vcf-mcp: warning: ${secrets.invalid.length} malformed line(s) in ${secrets.path}: ` +
+          `${secrets.invalid.slice(0, 5).join(", ")}\n`,
+      );
+    }
+    log.info(
+      {
+        path: secrets.path,
+        loaded_count: secrets.loaded.length,
+        skipped_count: secrets.skipped.length,
+        // Names are not secrets; values would be — only names logged.
+        loaded: secrets.loaded,
+      },
+      "loaded secrets file",
+    );
+  }
 
   // Config resolution: VCF_CONFIG env > ~/.vcf/config.yaml.
   const configPath = process.env["VCF_CONFIG"] ?? resolvePath(homedir(), ".vcf", "config.yaml");
@@ -128,6 +160,28 @@ async function main(): Promise<void> {
     globalDb,
     ...(projectDb !== undefined ? { projectDb } : {}),
   });
+
+  // Best-effort 90-day kb-drafts cleanup sweep on boot. Never blocks
+  // startup; errors land in the logger.
+  void (async () => {
+    try {
+      const { runKbDraftsCleanup } = await import("./util/kbDraftsCleanup.js");
+      const result = await runKbDraftsCleanup({ liveKbRoot: config.kb.root });
+      if (result.removed.length > 0 || result.trimmed.length > 0) {
+        log.info(
+          {
+            examined: result.examined,
+            removed: result.removed.length,
+            trimmed: result.trimmed.length,
+            errors: result.errors.length,
+          },
+          "vcf-mcp: kb-drafts cleanup sweep complete",
+        );
+      }
+    } catch (e) {
+      log.warn({ err: (e as Error).message }, "vcf-mcp: kb-drafts cleanup failed (non-fatal)");
+    }
+  })();
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

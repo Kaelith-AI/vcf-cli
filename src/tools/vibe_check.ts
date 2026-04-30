@@ -156,12 +156,11 @@ export function registerVibeCheck(server: McpServer, deps: ServerDeps): void {
             bySeverity[f.severity] = (bySeverity[f.severity] ?? 0) + 1;
           }
 
-          const verdict =
-            findings.some((f) => f.severity === "blocker")
-              ? "BLOCK"
-              : findings.some((f) => f.severity === "warning")
-                ? "NEEDS_WORK"
-                : "PASS";
+          const verdict = findings.some((f) => f.severity === "blocker")
+            ? "BLOCK"
+            : findings.some((f) => f.severity === "warning")
+              ? "NEEDS_WORK"
+              : "PASS";
 
           const summary = `vibe_check: verdict=${verdict}, ${findings.length} finding(s) across ${parsed.paths.length} dir(s)`;
 
@@ -176,9 +175,7 @@ export function registerVibeCheck(server: McpServer, deps: ServerDeps): void {
                     truncated: findings.length >= parsed.max_findings,
                   },
                 }
-              : {
-                  expand_hint: "Pass expand=true for the findings array.",
-                }),
+              : {}),
           });
         },
         (payload) => {

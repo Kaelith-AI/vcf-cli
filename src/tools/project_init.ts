@@ -24,6 +24,7 @@
 import { mkdir, writeFile, readFile, chmod, stat, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
+import { homedir } from "node:os";
 import { simpleGit } from "simple-git";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -209,7 +210,7 @@ export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
           const mcpBlock = {
             command: "npx",
             args: ["-y", "@kaelith-labs/cli", "vcf-mcp"],
-            env: { VCF_CONFIG: "${HOME}/.vcf/config.yaml" },
+            env: { VCF_CONFIG: `${homedir()}/.vcf/config.yaml` },
           };
           let mcpMerged = false;
           if (existsSync(mcpJsonPath)) {
@@ -294,10 +295,7 @@ export function registerProjectInit(server: McpServer, deps: ServerDeps): void {
                     vcf_version: VERSION,
                   },
                 }
-              : {
-                  expand_hint:
-                    "Call project_init again with expand=true to see the full file list.",
-                }),
+              : {}),
           });
 
           return payload;

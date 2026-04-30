@@ -116,9 +116,11 @@ describe("response_log markdown migration (Phase-2 B)", () => {
       expect(second.inserted).toBe(0);
       expect(second.skipped).toBe(3);
 
-      const rows = db.prepare(
-        "SELECT run_id, builder_claim, finding_ref, migration_note FROM response_log ORDER BY id ASC",
-      ).all() as unknown as Array<{
+      const rows = db
+        .prepare(
+          "SELECT run_id, builder_claim, finding_ref, migration_note FROM response_log ORDER BY id ASC",
+        )
+        .all() as unknown as Array<{
         run_id: string;
         builder_claim: string;
         finding_ref: string | null;
@@ -160,7 +162,10 @@ describe("response_log markdown migration (Phase-2 B)", () => {
     const db = new DatabaseSync(dbPath, { enableForeignKeyConstraints: true });
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA foreign_keys = ON");
-    runMigrations(db, PROJECT_MIGRATIONS.filter((m) => m.version <= 2));
+    runMigrations(
+      db,
+      PROJECT_MIGRATIONS.filter((m) => m.version <= 2),
+    );
     db.prepare(
       "INSERT INTO response_log (review_run_id, stance, note, created_at) VALUES (?, ?, ?, ?)",
     ).run("legacy-run", "agree", "legacy response text", Date.now());
@@ -168,9 +173,11 @@ describe("response_log markdown migration (Phase-2 B)", () => {
     // Now apply v3+v4 — the rename must succeed without data loss.
     runMigrations(db, PROJECT_MIGRATIONS);
 
-    const cols = (db.prepare("PRAGMA table_info(response_log)").all() as unknown as Array<{
-      name: string;
-    }>).map((r) => r.name);
+    const cols = (
+      db.prepare("PRAGMA table_info(response_log)").all() as unknown as Array<{
+        name: string;
+      }>
+    ).map((r) => r.name);
     expect(cols).toContain("run_id");
     expect(cols).toContain("builder_claim");
     expect(cols).toContain("response_text");

@@ -40,11 +40,12 @@ export default [
     },
   },
   {
-    // src/cli.ts is the `vcf` maintenance CLI, NOT the MCP server. It
-    // doesn't share stdio with JSON-RPC, so structured `--format json`
-    // output on stdout is both allowed and expected (e.g. for `vcf verify
-    // --format json | jq` or n8n workflow parsing).
-    files: ["src/cli.ts"],
+    // src/cli.ts and src/cli/** are the `vcf` maintenance CLI, NOT the MCP
+    // server. They don't share stdio with JSON-RPC, so structured
+    // `--format json` output on stdout is both allowed and expected (e.g.
+    // for `vcf verify --format json | jq` or n8n workflow parsing). The
+    // stdio-stdout rule is scoped to the MCP runtime only.
+    files: ["src/cli.ts", "src/cli/**/*.ts"],
     rules: {
       "no-restricted-syntax": "off",
     },

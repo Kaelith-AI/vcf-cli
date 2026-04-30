@@ -129,7 +129,14 @@ describe("M7 review subsystem (project scope)", () => {
       projectSlug: "test-project",
       projectDbPath: join(projectDir, ".vcf", "project.db"),
     };
-    const server = createServer({ scope: "project", resolved, config, globalDb, projectDb, homeDir: home });
+    const server = createServer({
+      scope: "project",
+      resolved,
+      config,
+      globalDb,
+      projectDb,
+      homeDir: home,
+    });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
     const client = new Client({ name: "t", version: "0" }, { capabilities: {} });
@@ -332,7 +339,14 @@ describe("M7 review subsystem (project scope)", () => {
       projectSlug: "test-project-o",
       projectDbPath: pdbPath,
     };
-    const server = createServer({ scope: "project", resolved, config, globalDb, projectDb, homeDir: home });
+    const server = createServer({
+      scope: "project",
+      resolved,
+      config,
+      globalDb,
+      projectDb,
+      homeDir: home,
+    });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
     const client = new Client({ name: "t2", version: "0" }, { capabilities: {} });

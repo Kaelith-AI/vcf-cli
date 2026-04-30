@@ -28,9 +28,6 @@ const TestQaInput = z
       .max(365)
       .default(30)
       .describe("tools not QA'd within this window are flagged as 'stale'"),
-    mode: z.enum(["llm-driven", "endpoint"]).default("llm-driven"),
-    endpoint: z.string().min(1).max(128).optional(),
-    model_id: z.string().min(1).max(128).optional(),
     expand: z.boolean().default(true),
   })
   .strict();
@@ -51,7 +48,7 @@ export function registerTestQa(server: McpServer, deps: ServerDeps): void {
     {
       title: "QA Test — Command-Surface Coverage",
       description:
-        "Produce a coverage matrix of every MCP tool + its last-invoked-at / result_code, flagging tools not exercised within stale_days. Pair with the scaffolding prompt to drive a subagent-run sweep across the surface. mode=endpoint forwards to a configured OpenAI-compatible endpoint for the sweep; mode=llm-driven (default) returns the prompt for the calling LLM.",
+        "Produce a coverage matrix of every MCP tool + its last-invoked-at / result_code, flagging tools not exercised within stale_days. Returns the scaffolding prompt for the calling LLM to drive a subagent sweep across the surface.",
       inputSchema: TestQaInput,
     },
     async (args: TestQaArgs) => {
@@ -65,23 +62,24 @@ export function registerTestQa(server: McpServer, deps: ServerDeps): void {
 
           const coverage = buildCoverage(deps, projectRoot, parsed.stale_days);
           const stale = coverage.filter((c) => c.stale);
-          const prompt = buildPrompt(coverage, stale, parsed);
+          const prompt = buildPrompt(coverage, stale, parsed.stale_days);
 
-          return success([], `test_qa: ${coverage.length} tool(s), ${stale.length} stale (>${parsed.stale_days}d)`, {
-            ...(parsed.expand
-              ? {
-                  content: {
-                    mode: parsed.mode,
-                    stale_days: parsed.stale_days,
-                    coverage,
-                    stale_tools: stale.map((s) => s.tool),
-                    scaffolding_prompt: prompt,
-                  },
-                }
-              : {
-                  expand_hint: "Pass expand=true for the coverage matrix and scaffolding prompt.",
-                }),
-          });
+          return success(
+            [],
+            `test_qa: ${coverage.length} tool(s), ${stale.length} stale (>${parsed.stale_days}d)`,
+            {
+              ...(parsed.expand
+                ? {
+                    content: {
+                      stale_days: parsed.stale_days,
+                      coverage,
+                      stale_tools: stale.map((s) => s.tool),
+                      scaffolding_prompt: prompt,
+                    },
+                  }
+                : {}),
+            },
+          );
         },
         (payload) => {
           writeAudit(deps.globalDb, {
@@ -147,11 +145,7 @@ function buildCoverage(
   });
 }
 
-function buildPrompt(
-  coverage: ToolCoverage[],
-  stale: ToolCoverage[],
-  parsed: TestQaArgs,
-): string {
+function buildPrompt(coverage: ToolCoverage[], stale: ToolCoverage[], staleDays: number): string {
   return [
     `# QA sweep — exhaustive command-surface coverage`,
     ``,
@@ -164,7 +158,7 @@ function buildPrompt(
     `## Coverage matrix`,
     ``,
     `- **${coverage.length}** tool(s) have audit rows against this project.`,
-    `- **${stale.length}** flagged as stale (not invoked in ${parsed.stale_days}d).`,
+    `- **${stale.length}** flagged as stale (not invoked in ${staleDays}d).`,
     ``,
     stale.length > 0
       ? "Stale tools:\n" + stale.map((s) => `- \`${s.tool}\``).join("\n") + "\n"
@@ -210,6 +204,24 @@ function buildPrompt(
     `- Keep invocations idempotent when possible. A QA pass that mutates`,
     `  persistent state (creates plans, writes reviews) should do so in`,
     `  a throwaway scratch path.`,
+    ``,
+    `## Provenance`,
+    ``,
+    `If you persist this QA pass to a file (recommended — operators want a`,
+    `record), include a provenance block at the top:`,
+    ``,
+    `\`\`\`yaml`,
+    `provenance:`,
+    `  tool: test_qa`,
+    `  phase: test-qa`,
+    `  model: <exact model id of the runner>`,
+    `  endpoint: claude-code-subagent  # or local-ollama / litellm / etc.`,
+    `  generated_at: <ISO 8601 timestamp>`,
+    `\`\`\``,
+    ``,
+    `If you don't know your exact model id, ask the operator. The provenance`,
+    `is how the operator weights the QA verdict — a "FAIL" from a frontier`,
+    `model carries different weight than a "FAIL" from a 3B local model.`,
   ].join("\n");
 }
 

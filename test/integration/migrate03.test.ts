@@ -58,9 +58,7 @@ describe("migrateProject03to05", () => {
     });
     expect(result.outcome).toBe("migrated");
     expect(result.slug).toBe("demo-project");
-    expect(result.stateDbPath).toBe(
-      join(home, ".vcf", "projects", "demo-project", "project.db"),
-    );
+    expect(result.stateDbPath).toBe(join(home, ".vcf", "projects", "demo-project", "project.db"));
     expect(existsSync(result.stateDbPath)).toBe(true);
 
     // Copied DB has updated root_path + slug-normalized name.

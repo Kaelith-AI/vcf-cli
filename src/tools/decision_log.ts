@@ -110,11 +110,7 @@ export function registerDecisionLogAdd(server: McpServer, deps: ServerDeps): voi
           const payload = success(
             [target],
             `Logged decision "${slug}" (${parsed.status}) at ${target}.`,
-            parsed.expand
-              ? { content: { path: target, slug, status: parsed.status } }
-              : {
-                  expand_hint: "Call decision_log_add with expand=true for the decision metadata.",
-                },
+            parsed.expand ? { content: { path: target, slug, status: parsed.status } } : {},
           );
           return payload;
         },
@@ -190,9 +186,7 @@ export function registerDecisionLogList(server: McpServer, deps: ServerDeps): vo
           const payload = success(
             rows.map((r) => r.path),
             `decision_log_list: ${rows.length} entr(y|ies).`,
-            parsed.expand
-              ? { content: { entries: rows } }
-              : { expand_hint: "Call decision_log_list with expand=true for the full array." },
+            parsed.expand ? { content: { entries: rows } } : {},
           );
           return payload;
         },

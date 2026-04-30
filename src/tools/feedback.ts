@@ -9,6 +9,14 @@
 // lives in the global store (~/.vcf/lessons.db, `feedback` table) tagged
 // with project_root. Disabling the store via
 // `config.lessons.global_db_path: null` disables feedback too.
+//
+// NOTE (scope refactor): feedback_add could theoretically run at global scope
+// because the backing store is the global lessons.db — not the per-project DB.
+// However, it needs project_root to tag each entry, which currently comes from
+// deps.projectDb. To move it to global scope, project_root would need to become
+// an optional caller-supplied input, or the server would need to resolve it from
+// the registry without projectDb. That is a schema-breaking change; deferred
+// until global-scope feedback is explicitly requested as a follow-up.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -198,7 +206,7 @@ export function registerFeedbackList(server: McpServer, deps: ServerDeps): void 
                 })),
                 returned: rows.length,
               },
-              ...(parsed.expand ? {} : { expand_hint: "Pass expand=true for note bodies." }),
+              ...(parsed.expand ? {} : {}),
             },
           );
         },
