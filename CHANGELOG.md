@@ -6,6 +6,69 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## Unreleased
 
+## [0.7.0] — 2026-04-30
+
+### Added
+
+- **`research_assemble` is now two-step (outline → draft).** The single-call
+  assembler emitted plausible prose that retrofitted citations after the
+  fact; the two-step pattern forces the model to think the entire draft
+  through end-to-end before writing. Step 1 produces a structured outline
+  JSON (frontmatter sketch, narrative arc, sections with key claims +
+  supporting aspects, weak-claim flags). Step 2 realizes the outline
+  as draft.md + sources.json. The outline gates the body — nothing in
+  the draft that wasn't in the outline; nothing in the outline without
+  an aspect-finding citation. Doubles execute-mode latency; that's the
+  trade. Each `kind` now ships with a structural exemplar pointer
+  (primer→primers/coding.md, best-practice→best-practices/coding.md,
+  review-stage→review-system/code/01-...md, reviewer→reviewers/reviewer-
+  code.md, lens→lenses/code-health.md, standard→standards/tag-vocabulary.md).
+  The assembler inlines a truncated copy of the exemplar in the prompt
+  so new drafts mirror frontmatter shape, section ordering, and citation
+  style instead of inventing structure each time.
+- **`research_resolve mode=execute`** — per-claim parallel dispatch. The
+  scaffold-returning directive mode (default) is unchanged; `mode=execute`
+  resolves the configured singleton role (default `research_primary`) and
+  dispatches one LLM call per contested claim in parallel via the
+  dispatcher. Writes `resolutions/<claim_id>.json` per claim plus an
+  aggregate `resolutions.json` carrying provenance and a `same_model_as_verify`
+  warning when the resolve role and verify role share a model.
+- **`vcf config upgrade`** — idempotent codemod that adds the 0.7-shape role
+  fields to an existing config.yaml without changing semantics. Adds
+  `endpoint.kind: api` to endpoints lacking it (cosmetic — defaults
+  cover it), infers `model_alias.vendor` from the model_id prefix
+  (claude→anthropic, gpt/o1+/chatgpt→openai, gemini/gemma→google,
+  llama/codellama→meta, mistral/mixtral→mistral, qwen→qwen,
+  deepseek→deepseek, grok→xai, command/cohere→cohere, phi→microsoft;
+  strips proxy namespace prefixes like `CLIProxyAPI/...` before matching),
+  inserts an empty `tags: []` with a TODO comment, and appends a commented
+  `roles:` scaffold when none is configured. Sentinel detection makes
+  re-runs no-op. Modes: default writes `<config>.upgraded`, `--dry-run`
+  prints to stdout, `--apply` backs up to `.bak-<ts>` and overwrites.
+
+### Fixed
+
+- **dispatcher: strip `temperature` for CLIProxyAPI/* harness routes.**
+  LiteLLM rejects requests to CLIProxyAPI-prefixed models with HTTP 400
+  ("temperature is deprecated for this model") because those routes proxy
+  to harness backends (Anthropic CLI, OpenAI agents tooling, Gemini CLI)
+  that don't accept the field. Two changes: `llmClient.ts` no longer
+  hardcodes a 0.1 default — temperature is only included in the body
+  when the caller passes it explicitly. `dispatcher.ts` strips temperature
+  for any `model_id` starting with a known no-temperature prefix
+  (currently `["CLIProxyAPI/"]`). Same proxy serves OpenRouter/ + ollama/
+  routes which DO accept temperature, so the strip is per-model not
+  per-endpoint.
+- **research_verify accepts upstream phase `compose` OR `assemble`.** The
+  unified pipeline introduced research_assemble between compose and verify,
+  so draft.md's provenance now reads `phase='assemble'` (last-touch tool)
+  instead of `phase='compose'` (legacy direct path). Verify's expected-
+  phase validator was hardcoded to `'compose'` and rejected every assembled
+  draft with E_VALIDATION. Generalized `requireProvenance` /
+  `readJsonProvenance` / `readMarkdownProvenance` to accept
+  `expectedPhase: string | string[]`; verify now passes `['compose',
+  'assemble']`.
+
 ### Changed (breaking — 0.7 scope)
 
 - **Lessons + feedback are now global-only (#41).** Both improvement-cycle
