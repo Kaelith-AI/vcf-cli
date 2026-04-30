@@ -99,8 +99,8 @@ Why: a single `plan_get` without `expand=true` is ~200 tokens. With `expand=true
 
 Review is a 9-stage pipeline per review type (`code`, `security`, `production`). Default: **run all 9 stages unless the user explicitly scopes it down**. "Run the review" means the full 9, not stage 1 alone. Saving 20 minutes is not worth shipping a bug.
 
-- **`review_prepare({ type, stage, model_id?, endpoint? })`** — resolves the reviewer overlay (type → model-family overlay → trust-level overlay), composes the prompt, returns a run_id and the prompt messages for inspection. Non-mutating.
-- **`review_execute({ run_id, model_id, endpoint, timeout_ms?, temperature? })`** — fires the LLM call. Cold-starts on local models can take 2-5 minutes; default `timeout_ms` is 180s — **override to 600000 for cold local endpoints**. Pass `model_id` explicitly (`qwen3-coder:30b` or `gpt-5.4`, depending on routing); omitting it falls back to `config.defaults.review`.
+- **`review_prepare({ type, stage, diff_ref?, force?, model_id?, endpoint? })`** — resolves the reviewer overlay (type → model-family overlay → trust-level overlay), composes the prompt, returns a run_id and the prompt messages for inspection. Non-mutating. `diff_ref` is optional — omit it when you'll run the reviewer in directive mode (the reviewer will Read project files directly instead of consuming a pre-computed scoped diff).
+- **`review_execute({ run_id, mode?, model_id?, endpoint?, timeout_ms?, temperature? })`** — fires the LLM call. `mode: "execute"` (default) calls the configured endpoint directly. `mode: "directive"` returns the stage rubric + carry-forward + `project_root` and stops; the orchestrator runs the reviewer with full Read access (Phase H fix — reviewer no longer constrained to scoped diff) and then calls `review_submit`. Cold-starts on local models can take 2-5 minutes; default `timeout_ms` is 180s — **override to 600000 for cold local endpoints**. Pass `model_id` explicitly (`qwen3-coder:30b` or `gpt-5.4`, depending on routing); omitting it falls back to `config.defaults.review`.
 - **`review_submit({ run_id, verdict, findings, carry_forward? })`** — persists the reviewer's structured output. `verdict` is `PASS | NEEDS_WORK | BLOCK`. `PASS` on a prior Medium+ finding requires either a verified code change or an explicit `accepted_risk` carry-forward.
 - **`review_history({ project?, type?, stage?, limit? })`** — query past runs.
 - **`response_log_add({ run_id, finding_ref?, builder_claim, response_text, references? })`** — the builder's reply to a finding. `builder_claim` is `agree | disagree`. The finding is not closed by the response — the *next* reviewer closes it by producing a new verdict. Response is context, not instruction.
@@ -119,12 +119,22 @@ Review is a 9-stage pipeline per review type (`code`, `security`, `production`).
 - **`decision_log_list({ limit?, since? })`** — browse past decisions.
 - **`lifecycle_report({ mode?, format?, include?, endpoint?, model_id?, expand? })`** — project-scope narrative or structured view across all seven steps. `mode: structured` is deterministic SQL (<2s on 10k rows). `mode: narrative` fans out per-section LLM calls — default model is `config.defaults.lifecycle_report`. Output is `plans/lifecycle-report.{md,json}`.
 
+### Research (KB-entry creation)
+
+The pipeline is `compose → assemble → verify → resolve → operator merge`. Each tool offers `mode: execute | directive`. See §10c for the cookbook.
+
+- **`research_compose({ kind, topic, aspects[], recency_window_days?, recency_floor_iso?, mode?, panel_role? })`** — fans out one research agent per aspect. `mode=execute` runs the configured `research_panel` role (3 vendor-diverse frontier agents) and writes per-aspect JSONs to `~/.vcf/kb-drafts/<draft_id>/aspects/`. `mode=directive` returns the scaffolding prompt. Pass `recency_floor_iso` to switch to update-flow mode (focus on changes since the existing artifact's `generated_at`).
+- **`research_assemble({ draft_id, kind, topic, role?, mode? })`** — merges aspect JSONs into `draft.md` + `sources.json` with unified provenance. `mode=execute` calls `kb_finalize` role.
+- **`research_verify({ draft_id, mode?, endpoint?, model_id?, timeout_ms? })`** — different-model verifier. **Recommended: `mode=directive`** — lets the orchestrator close the temporal-bias loop with its harness's web search (the verifier's training cutoff is unreliable for recent material; primary sources must be checked).
+- **`research_resolve({ draft_id, severity_min? })`** — fan-out scaffold for confirming/denying contested claims at primary sources.
+
 ### Setup / catalog
 
 - **`project_init({ root, name? })`** / **`project_init_existing({ root })`** — adopt a directory as a VCF project. Writes `.vcf/project.db`.
 - **`project_list({ state? })`** / **`portfolio_status()`** / **`portfolio_graph()`** — browse the portfolio.
 - **`config_get()`** — return the resolved config (secrets redacted).
-- **`endpoint_list()`** / **`model_list({ endpoint? })`** — enumerate configured LLM routes.
+- **`endpoint_list({ trust_level? })`** — enumerate configured LLM routes (surfaces `kind`, `enabled`, `cmd`/`base_url`, etc.).
+- **`model_list({ prefer_for? })`** — enumerate model aliases with capability tags + role bindings.
 - **`primer_list({ query?, tags?, kind? })`** / **`pack_list()`** — browse the KB.
 
 ## 6. Error codes
@@ -151,6 +161,11 @@ All failures carry a stable `code: "E_*"` string. Branch on the code, never on t
 | `E_ENDPOINT_UNREACHABLE` | yes | LLM endpoint did not respond. Check Ollama / proxy. |
 | `E_UNWRITABLE` | no | Target path not writable. Check directory perms. |
 | `E_CONFIRM_REQUIRED` | yes | Destructive action needs a fresh `confirm_token`. Ask the user. |
+| `E_ROLE_CAPABILITY_MISMATCH` | no | A role's default model lacks one of the role's required capability tags. Operator must update `config.roles[].requires` or add the missing tag to the model. |
+| `E_PANEL_VENDOR_COLLISION` | no | A panel role with `vendor_diverse: true` has two slots from the same vendor. Swap one slot for a different-vendor model. |
+| `E_ENDPOINT_DISABLED` | no | The configured endpoint has `enabled: false`. Re-enable in config.yaml or pick a different endpoint. |
+| `E_CLI_NOT_FOUND` | no | A `kind: cli` endpoint's `cmd` is not on PATH. Install the harness or fix `cmd`. |
+| `E_CLI_AUTH_FAILED` | no | A `kind: cli` endpoint's harness is not authenticated. Run the harness's login flow (`claude login`, `codex auth`, etc.). |
 | `E_INTERNAL` | no | Unexpected server bug — report to the user with the run_id. |
 
 `retryable: true` means a re-call without user intervention can succeed. `retryable: false` means do not retry silently — either the user must change something, or the input is wrong.
@@ -221,6 +236,45 @@ Rule: a primer you would not cite in your output is a primer you should not load
 - Frontier routes go through `CLIProxyAPI/gpt-5.4` or similar — never direct OpenRouter unless the user set it up that way.
 - Cold-start `timeout_ms`: default `180000` (180s) is often too short. For first call of a session to a local model, pass `600000`.
 - Model family extraction drives overlay resolution: `qwen3-coder` → `qwen` (local); `gpt-5.4` → `gpt` (frontier); `gemma4:31b` → `gemma` (local). Resolution order: `<type>.<family>.md → <type>.<trust-level>.md → <type>.md`.
+
+## 10a. Endpoints, models, and roles (post-0.6.x)
+
+VCF's model layer has three concepts. Older tools still resolve through `config.defaults.<tool>` for back-compat; newer pipelines (research, KB-review) resolve through `config.roles[<name>]`.
+
+**Endpoints** (`config.endpoints[]`) — how the dispatcher reaches a provider.
+- `kind: "api"` (default) — HTTP endpoint with `base_url` + `auth_env_var`. OpenAI-compatible, Anthropic, Gemini, LiteLLM, etc.
+- `kind: "cli"` — local subprocess (`cmd: "claude" | "codex" | "gemini" | "ollama"`). Auth + web search come from the harness; no `base_url` or `auth_env_var`.
+- `enabled: false` toggles an endpoint off without deleting it. `vcf health` skips disabled endpoints; role resolution rejects them with `E_ENDPOINT_DISABLED`.
+
+**Models** (`config.model_aliases[]`) — named handles with capability tags.
+- `vendor: "anthropic" | "openai" | "google" | …` — used by panel roles for vendor-diversity enforcement.
+- `tags: ["frontier", "web_search", "harness", "code_review", "local", "long_context", "vision", …]` — declarative capabilities.
+
+**Roles** (`config.roles[]`) — capability-driven bindings the new pipelines resolve against.
+- Singleton role: `{ default: "<alias>", requires: ["frontier", "web_search"] }`
+- Panel role: `{ defaults: ["alias1", "alias2", "alias3"], requires: [...], vendor_diverse: true }`
+- Reserved names: `research_primary`, `research_panel`, `kb_review_primary`, `kb_review_panel`, `kb_finalize`, `gate_review_primary`, `builder_local`.
+- Validation runs at config load. `E_ROLE_CAPABILITY_MISMATCH` and `E_PANEL_VENDOR_COLLISION` surface immediately on startup.
+
+## 10b. Panel mode: execute vs. directive
+
+The research pipeline (`research_compose`, `research_assemble`, `research_verify`) and `review_execute` accept a `mode` arg:
+
+- **`mode: "execute"`** — MCP runs the LLM call(s) itself via the dispatcher. One round-trip from the orchestrator's POV. Fast for simple cases. Tokens audited centrally.
+- **`mode: "directive"`** — MCP returns a directive: prompt, expected output path, next-tool pointer. The orchestrator (Claude Code, Codex, Gemini CLI) runs the agent itself and writes the output. **Use directive mode when the work needs the orchestrator's harness web search** (the temporal-bias fix in research_verify, the "reviewer reads project directly" Phase H fix in review_execute). Directive mode also matches the original 3-build / 1-assemble / 3-review / 1-finalize script pattern when the orchestrator drives the panel.
+
+Default: `mode: "execute"` for back-compat. Use `mode: "directive"` for verify (always, until tool-use API wiring lands) and review_execute (for stages that need to read across the project, not just the diff).
+
+## 10c. Research pipeline cookbook
+
+The pipeline shape is `compose → assemble → verify → resolve → operator merge`. Both modes are available at every step:
+
+- **`research_compose`** — fans out one agent per aspect. `mode=execute` resolves `research_panel` role (default 3 vendor-diverse frontier agents) and writes per-aspect JSONs to `~/.vcf/kb-drafts/<draft_id>/aspects/`. `mode=directive` returns the scaffolding prompt for the orchestrator.
+- **`research_assemble`** — merges aspect JSONs into one `draft.md` + `sources.json` with provenance. `mode=execute` calls `kb_finalize` role; `mode=directive` returns the assembly prompt.
+- **`research_verify`** — different-model verifier. `mode=directive` lets the orchestrator close the temporal-bias loop using its harness's web search (recommended). `mode=execute` is the legacy single-call path.
+- **`research_resolve`** — primary-source confirmation per contested claim. Currently directive-only; orchestrator dispatches one subagent per claim.
+- **Update flow**: pass `recency_floor_iso: "<existing artifact's provenance.generated_at>"` to `research_compose`. Prompts switch to "focus on changes since X" mode.
+- **Cleanup**: 90-day sweep at vcf-mcp boot. Un-shipped drafts older than 90 days → deleted. Shipped drafts → trimmed (raw aspect/verify dumps removed; `resolutions.json` kept as audit trail).
 
 ## 11. One-call sanity checklist
 
