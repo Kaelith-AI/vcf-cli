@@ -10,9 +10,12 @@
 // resolutions.json that the operator pairs with verify.json to decide what
 // stays in the draft.
 //
-// This is a scaffold-returning tool (no direct LLM call) — like
-// research_compose, the heavy lifting happens in the calling agent's
-// subagent fan-out. So no defaults.research_resolve config slot is needed.
+// Two modes:
+//   mode=directive (default, back-compat) — return a scaffold prompt; the
+//     calling agent runs subagents and writes the JSONs itself.
+//   mode=execute — MCP resolves a singleton role and dispatches one LLM
+//     call per claim in parallel via the dispatcher. Writes per-claim
+//     resolutions + the aggregate file directly.
 //
 // Layering: reads ~/.vcf/kb-drafts/<draft_id>/{draft.md, verify.json},
 // returns a prompt that walks the calling LLM through:
@@ -27,13 +30,18 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
-import { writeAudit } from "../util/audit.js";
+import { writeAudit, redact } from "../util/audit.js";
 import { McpError } from "../errors.js";
 import { kbDraftsDir } from "../project/stateDir.js";
-import { readJsonProvenance } from "../util/provenance.js";
+import { buildProvenance, readJsonProvenance, type Provenance } from "../util/provenance.js";
+import { dispatchChatCompletion } from "../util/dispatcher.js";
+import { resolveRole, hasRole } from "../util/roleResolve.js";
+import { resolveAuthKey } from "../review/endpointResolve.js";
+import type { ChatMessage } from "../util/llmClient.js";
 
 const DraftIdSchema = z
   .string()
@@ -52,6 +60,38 @@ const ResearchResolveInput = z
       .describe(
         "only resolve claims at or above this severity. Default 'low' resolves everything. Use 'medium' to skip nitpicks, 'high' to focus only on hallucinated specs / load-bearing claims.",
       ),
+    /**
+     * mode=directive (default, back-compat) — return the scaffold prompt;
+     *   the calling agent dispatches per-claim subagents and writes the
+     *   JSONs itself.
+     * mode=execute — MCP resolves the configured singleton role
+     *   (default: research_primary) and dispatches one LLM call PER
+     *   contested claim in parallel via the dispatcher. Writes
+     *   resolutions/<claim_id>.json per claim + the aggregate
+     *   resolutions.json. Use when the operator wants resolve to run
+     *   end-to-end without round-tripping through the orchestrator.
+     */
+    mode: z.enum(["directive", "execute"]).default("directive"),
+    /**
+     * Singleton role used in mode=execute. Should resolve to a different
+     * model from research_verify's role to avoid same-model confirmation
+     * bias. Defaults to research_primary; operators add a dedicated
+     * resolve role if their verifier already uses research_primary.
+     */
+    role: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z][a-z0-9_-]*$/)
+      .default("research_primary"),
+    /** Per-claim timeout. The whole call is bounded by this — slow
+     *  claims abort along with all in-flight peers. */
+    timeout_ms: z
+      .number()
+      .int()
+      .positive()
+      .max(15 * 60_000)
+      .default(300_000),
     expand: z.boolean().default(true),
   })
   .strict();
@@ -133,6 +173,21 @@ export function registerResearchResolve(server: McpServer, deps: ServerDeps): vo
             );
           }
 
+          // mode=execute: resolve a singleton role and dispatch one LLM
+          // call per contested claim in parallel. Writes per-claim files
+          // + the aggregate. Skips entirely when nothing to resolve so
+          // the empty-claims summary stays consistent with directive mode.
+          if (parsed.mode === "execute" && filtered.length > 0) {
+            return await runExecute(deps, parsed, {
+              draftDir,
+              draftPath,
+              verifyPath,
+              verifyProvenance,
+              filtered,
+              totalClaims: allClaims.length,
+            });
+          }
+
           interface ResolveContent {
             draft_id: string;
             draft_path: string;
@@ -172,7 +227,11 @@ export function registerResearchResolve(server: McpServer, deps: ServerDeps): vo
           };
 
           const paths = filtered.length === 0 ? [verifyPath] : [verifyPath, draftPath];
-          return success(paths, summary, parsed.expand ? { content } : {});
+          return success<Record<string, unknown>>(
+            paths,
+            summary,
+            parsed.expand ? { content: content as unknown as Record<string, unknown> } : {},
+          );
         },
         (payload) => {
           writeAudit(deps.globalDb, {
@@ -365,3 +424,363 @@ function readProjectRoot(deps: ServerDeps): string | null {
 }
 
 export { ResearchResolveInput };
+
+// ---------------------------------------------------------------------------
+// mode=execute — per-claim parallel dispatch
+// ---------------------------------------------------------------------------
+
+interface ExecuteContext {
+  draftDir: string;
+  draftPath: string;
+  verifyPath: string;
+  verifyProvenance: Provenance;
+  filtered: ContestedClaim[];
+  totalClaims: number;
+}
+
+interface Resolution {
+  id: string;
+  claim: string;
+  verdict: "confirmed" | "denied" | "undetermined";
+  evidence: ResolutionEvidence[];
+  rationale: string;
+  suggested_revision: string | null;
+}
+
+interface ResolutionEvidence {
+  url: string;
+  title: string;
+  publisher: string;
+  quote: string;
+  supports: "confirms" | "denies" | "neither";
+}
+
+interface ResolutionFile extends Resolution {
+  provenance: Provenance;
+  upstream_provenance: Provenance;
+  /** Wall-clock seconds for THIS claim's call. */
+  resolve_seconds: number;
+}
+
+async function runExecute(
+  deps: ServerDeps,
+  parsed: ResearchResolveArgs,
+  ctx: ExecuteContext,
+): Promise<ReturnType<typeof success<Record<string, unknown>>>> {
+  if (!hasRole(deps.config, parsed.role)) {
+    throw new McpError(
+      "E_VALIDATION",
+      `mode=execute requires role '${parsed.role}' configured under config.roles[]. ` +
+        `Add the role (singleton, requires [frontier, web_search]) or use mode=directive ` +
+        `to drive resolution from the orchestrator.`,
+    );
+  }
+  const resolved = resolveRole(deps.config, parsed.role);
+
+  // Same-model warning: if resolve uses the same model as verify, the result
+  // is confirmation bias rather than independent re-checking. Don't fail —
+  // the operator's config wins; surface in the audit + summary instead.
+  const sameModelAsVerify = resolved.modelId === ctx.verifyProvenance.model;
+
+  const draft = await readFile(ctx.draftPath, "utf8");
+  const sourcesPath = join(ctx.draftDir, "sources.json");
+  let sources = "{}";
+  if (existsSync(sourcesPath)) {
+    sources = await readFile(sourcesPath, "utf8");
+  }
+
+  const apiKey = resolveAuthKey(resolved.endpoint, undefined).apiKey;
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), parsed.timeout_ms);
+
+  // Per-claim parallel dispatch. Promise.all → fail-fast on the first
+  // claim's error. The aborted controller cancels in-flight peers so
+  // we don't waste cycles on calls that will be discarded.
+  const t0 = Date.now();
+  const dispatches = ctx.filtered.map(async (claim) => {
+    const claimT0 = Date.now();
+    const messages = composeResolveMessages({
+      claim,
+      draft,
+      sources,
+      todayIso,
+      verifyModel: ctx.verifyProvenance.model,
+    });
+    const redactedMessages = redact(messages) as ChatMessage[];
+    const result = await dispatchChatCompletion({
+      endpoint: resolved.endpoint,
+      modelId: resolved.modelId,
+      messages: redactedMessages,
+      apiKey,
+      signal: ctrl.signal,
+      temperature: 0.1,
+      jsonResponse: true,
+      ...(resolved.endpoint.provider_options
+        ? {
+            providerOptions: resolved.endpoint.provider_options as Record<string, unknown>,
+          }
+        : {}),
+    });
+    const verdict = parseResolution(result.content, claim);
+    const seconds = Math.round((Date.now() - claimT0) / 100) / 10;
+    return { claim, verdict, seconds };
+  });
+
+  let dispatchResults: Array<{
+    claim: ContestedClaim;
+    verdict: Resolution;
+    seconds: number;
+  }>;
+  try {
+    dispatchResults = await Promise.all(dispatches);
+  } finally {
+    clearTimeout(timer);
+  }
+  const totalElapsed = Math.round((Date.now() - t0) / 100) / 10;
+
+  // Build per-claim files + collect for the aggregate.
+  const resolutionsDir = join(ctx.draftDir, "resolutions");
+  await mkdir(resolutionsDir, { recursive: true });
+  const claimPaths: string[] = [];
+  const perClaimFiles: ResolutionFile[] = [];
+  for (const { claim, verdict, seconds } of dispatchResults) {
+    const claimProvenance = buildProvenance({
+      tool: "research_resolve",
+      phase: "resolve-claim",
+      model: resolved.modelId,
+      endpoint: resolved.endpoint.name,
+    });
+    const file: ResolutionFile = {
+      provenance: claimProvenance,
+      upstream_provenance: ctx.verifyProvenance,
+      resolve_seconds: seconds,
+      ...verdict,
+    };
+    const safeId = claim.id.replace(/[^a-zA-Z0-9._-]+/g, "_");
+    const claimPath = join(resolutionsDir, `${safeId}.json`);
+    await writeFile(claimPath, JSON.stringify(file, null, 2) + "\n", "utf8");
+    claimPaths.push(claimPath);
+    perClaimFiles.push(file);
+  }
+
+  // Counts surface in summary + audit.
+  const counts = perClaimFiles.reduce(
+    (acc, r) => {
+      acc[r.verdict] += 1;
+      return acc;
+    },
+    { confirmed: 0, denied: 0, undetermined: 0 },
+  );
+
+  // Aggregate file. Provenance.model = the dispatched model (every per-
+  // claim call used the same singleton role, so one model speaks for the
+  // whole aggregate).
+  const aggregate = {
+    provenance: buildProvenance({
+      tool: "research_resolve",
+      phase: "resolve",
+      model: resolved.modelId,
+      endpoint: resolved.endpoint.name,
+    }),
+    upstream_provenance: ctx.verifyProvenance,
+    draft_id: parsed.draft_id,
+    role: parsed.role,
+    same_model_as_verify: sameModelAsVerify,
+    claims_resolved: perClaimFiles.length,
+    severity_min: parsed.severity_min,
+    total_seconds: totalElapsed,
+    summary: counts,
+    resolutions: perClaimFiles,
+  };
+  const aggregatePath = join(ctx.draftDir, "resolutions.json");
+  await writeFile(aggregatePath, JSON.stringify(aggregate, null, 2) + "\n", "utf8");
+
+  const sameModelNote = sameModelAsVerify
+    ? ` [WARN: resolve model == verify model '${ctx.verifyProvenance.model}' — confirmation bias risk]`
+    : "";
+  return success<Record<string, unknown>>(
+    [aggregatePath, ...claimPaths],
+    `research_resolve: executed ${parsed.role} (${resolved.modelId}) → ` +
+      `${counts.confirmed} confirmed / ${counts.denied} denied / ${counts.undetermined} undetermined ` +
+      `(${perClaimFiles.length}/${ctx.totalClaims} claim(s), ${totalElapsed}s)${sameModelNote}`,
+    parsed.expand
+      ? {
+          content: {
+            mode: "execute",
+            draft_id: parsed.draft_id,
+            role: parsed.role,
+            model_id: resolved.modelId,
+            endpoint: resolved.endpoint.name,
+            same_model_as_verify: sameModelAsVerify,
+            resolutions_path: aggregatePath,
+            per_claim_paths: claimPaths,
+            summary: counts,
+            total_seconds: totalElapsed,
+          },
+        }
+      : {},
+  );
+}
+
+function composeResolveMessages(opts: {
+  claim: ContestedClaim;
+  draft: string;
+  sources: string;
+  todayIso: string;
+  verifyModel: string;
+}): ChatMessage[] {
+  const system = [
+    `You are resolving ONE contested claim from a KB draft. A verifier (${opts.verifyModel})`,
+    `flagged this claim as questionable. Your job: confirm or deny it against PRIMARY`,
+    `sources, independent of what the verifier said and independent of what the original`,
+    `composer wrote.`,
+    ``,
+    `Today is ${opts.todayIso}. You MUST web-search for any dated, numeric, or named claim.`,
+    `Do NOT rely on training memory for post-${opts.todayIso} facts; check the source URL.`,
+    ``,
+    `# The claim`,
+    ``,
+    `id: ${opts.claim.id}`,
+    `severity: ${opts.claim.severity}`,
+    `claim text: ${opts.claim.claim}`,
+    `verifier's reason for flagging it: ${opts.claim.reason}`,
+    ``,
+    `# Hard rules — what counts as evidence`,
+    ``,
+    `Acceptable primary sources:`,
+    `  - RFCs from rfc-editor.org (verify exact RFC number AND publication date — LLMs`,
+    `    hallucinate RFC numbers regularly).`,
+    `  - W3C / IETF / WHATWG specs at canonical URLs.`,
+    `  - OWASP project pages on owasp.org (verify exact list version + year).`,
+    `  - Peer-reviewed papers (DOI / journal / ACM / IEEE / USENIX).`,
+    `  - The project's own canonical docs site (postgres.org, kubernetes.io, etc.) — NOT`,
+    `    their /blog/ subtree.`,
+    ``,
+    `Not acceptable (these are what got flagged in the first place):`,
+    `  - Vendor marketing blogs citing self-generated statistics without methodology.`,
+    `  - Personal Medium posts citing specific multipliers / percentages.`,
+    `  - Aggregator round-ups (follow through to the original).`,
+    `  - Conference-talk slides without an accompanying paper.`,
+    ``,
+    `For statistics: the source must show methodology — sample size, survey design, year.`,
+    `Without methodology, the stat is denied even if a vendor blog repeats it.`,
+    ``,
+    `# Verdict rubric`,
+    ``,
+    `  - confirmed:    primary source clearly supports the claim AS STATED in the draft.`,
+    `  - denied:       primary source contradicts the claim, OR no primary source exists`,
+    `                  despite reasonable search effort (e.g. cited RFC number doesn't exist).`,
+    `  - undetermined: claim is plausible but no primary source either way; the draft`,
+    `                  should soften the wording, not assert it as fact.`,
+    ``,
+    `# Output`,
+    ``,
+    `Output ONLY a JSON object matching this shape (no prose outside the JSON):`,
+    ``,
+    `{`,
+    `  "id": "${opts.claim.id}",`,
+    `  "claim": "<verbatim claim text>",`,
+    `  "verdict": "confirmed" | "denied" | "undetermined",`,
+    `  "evidence": [`,
+    `    {`,
+    `      "url": "<primary source URL>",`,
+    `      "title": "<page title>",`,
+    `      "publisher": "<rfc-editor.org | owasp.org | journal name | ...>",`,
+    `      "quote": "<verbatim supporting passage, ≤80 words>",`,
+    `      "supports": "confirms" | "denies" | "neither"`,
+    `    }`,
+    `  ],`,
+    `  "rationale": "<one paragraph tying evidence to verdict>",`,
+    `  "suggested_revision": "<if denied: how to reword. if confirmed: null. if undetermined: caveat to add>"`,
+    `}`,
+  ].join("\n");
+
+  const user = [
+    `# Draft (full text)`,
+    ``,
+    "```markdown",
+    opts.draft,
+    "```",
+    ``,
+    `# Sources file`,
+    ``,
+    "```json",
+    opts.sources,
+    "```",
+    ``,
+    `Resolve the claim above. Output the JSON verdict only.`,
+  ].join("\n");
+
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+}
+
+function parseResolution(content: string, claim: ContestedClaim): Resolution {
+  const trimmed = stripJsonFence(content);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return {
+      id: claim.id,
+      claim: claim.claim,
+      verdict: "undetermined",
+      evidence: [],
+      rationale: `Resolver returned non-JSON response. Raw: ${trimmed.slice(0, 500)}`,
+      suggested_revision: null,
+    };
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new McpError("E_INTERNAL", "resolver response was not a JSON object");
+  }
+  const obj = parsed as Record<string, unknown>;
+  const verdict = isOneOf(obj["verdict"], ["confirmed", "denied", "undetermined"])
+    ? (obj["verdict"] as Resolution["verdict"])
+    : "undetermined";
+  const evidence: ResolutionEvidence[] = [];
+  const evRaw = Array.isArray(obj["evidence"]) ? obj["evidence"] : [];
+  for (const e of evRaw) {
+    if (typeof e !== "object" || e === null) continue;
+    const eo = e as Record<string, unknown>;
+    const supports = isOneOf(eo["supports"], ["confirms", "denies", "neither"])
+      ? (eo["supports"] as ResolutionEvidence["supports"])
+      : "neither";
+    evidence.push({
+      url: typeof eo["url"] === "string" ? eo["url"] : "",
+      title: typeof eo["title"] === "string" ? eo["title"] : "",
+      publisher: typeof eo["publisher"] === "string" ? eo["publisher"] : "",
+      quote: typeof eo["quote"] === "string" ? eo["quote"] : "",
+      supports,
+    });
+  }
+  const suggested = obj["suggested_revision"];
+  return {
+    id: typeof obj["id"] === "string" ? obj["id"] : claim.id,
+    claim: typeof obj["claim"] === "string" ? obj["claim"] : claim.claim,
+    verdict,
+    evidence,
+    rationale: typeof obj["rationale"] === "string" ? obj["rationale"] : "",
+    suggested_revision: typeof suggested === "string" && suggested.length > 0 ? suggested : null,
+  };
+}
+
+function stripJsonFence(s: string): string {
+  let t = s.trim();
+  if (t.startsWith("```")) {
+    const firstNl = t.indexOf("\n");
+    if (firstNl > 0) t = t.slice(firstNl + 1);
+    if (t.endsWith("```")) t = t.slice(0, -3);
+  }
+  return t.trim();
+}
+
+function isOneOf<T extends string>(v: unknown, allowed: readonly T[]): v is T {
+  return typeof v === "string" && (allowed as readonly string[]).includes(v);
+}
+
+// Test-only export for parser unit tests. Not part of the registered tool surface.
+export { composeResolveMessages, parseResolution, runExecute };
