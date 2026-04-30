@@ -25,7 +25,27 @@ function findPackageRoot(start: string): string {
   return resolvePath(start, "..", "..");
 }
 
-const PACKAGE_ROOT = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
+/**
+ * Resolve the package root lazily — `import.meta.url` is undefined when
+ * the bundle runs as a Node SEA single-executable application, so doing
+ * this at module-load time crashes `vcf version` from the SEA binary.
+ * Defer until the skills subcommand actually runs.
+ */
+let cachedPackageRoot: string | null = null;
+function packageRoot(): string {
+  if (cachedPackageRoot) return cachedPackageRoot;
+  let here: string;
+  try {
+    here = dirname(fileURLToPath(import.meta.url));
+  } catch {
+    // SEA / CJS context with no import.meta.url. Fall back to the binary
+    // directory; install-skills will still error cleanly if the skills
+    // tree isn't co-located (the SEA binary doesn't ship the skills dir).
+    here = dirname(process.execPath);
+  }
+  cachedPackageRoot = findPackageRoot(here);
+  return cachedPackageRoot;
+}
 
 type SkillLayout = "nested-md" | "flat-toml";
 interface SkillClientSpec {
@@ -56,7 +76,7 @@ export async function runInstallSkills(client: string, opts: { dest?: string }):
   // Skills ship alongside package.json under `skills/`. Both the dev
   // source tree and the flat bundled dist tree resolve through
   // findPackageRoot, so the same code works in either layout.
-  const skillsRoot = resolvePath(PACKAGE_ROOT, "skills");
+  const skillsRoot = resolvePath(packageRoot(), "skills");
   const pkgSkillsDir = join(skillsRoot, client);
   if (!existsSync(pkgSkillsDir)) {
     err(`skill pack missing in package at ${pkgSkillsDir}`, 3);

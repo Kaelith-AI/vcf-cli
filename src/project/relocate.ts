@@ -9,7 +9,7 @@
 // For actual directory moves, use `moveProject` instead.
 
 import { existsSync, statSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { isAbsolute, relative, resolve as resolvePath } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openProjectDb } from "../db/project.js";
 import { getProjectByName, getProjectByRoot } from "../util/projectRegistry.js";
@@ -94,6 +94,8 @@ function isInsideAllowedRoots(path: string, roots: readonly string[]): boolean {
   const abs = resolvePath(path);
   return roots.some((r) => {
     const absRoot = resolvePath(r);
-    return abs === absRoot || abs.startsWith(absRoot + "/");
+    if (abs === absRoot) return true;
+    const rel = relative(absRoot, abs);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
   });
 }

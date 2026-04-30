@@ -7,7 +7,7 @@
 // and explicit deregistration. Operates against the global DB only —
 // the authoritative per-project state lives in each project.db.
 
-import { resolve as resolvePath } from "node:path";
+import { resolve as resolvePath, basename } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { openGlobalDb } from "../db/global.js";
 import { openProjectDb } from "../db/project.js";
@@ -111,7 +111,7 @@ export async function runAdopt(opts: {
 
 export async function runProjectRegister(opts: { path: string; name?: string }): Promise<void> {
   const absRoot = resolvePath(opts.path);
-  const candidateName = opts.name ?? slugifyBasic(absRoot.split("/").pop() ?? "project");
+  const candidateName = opts.name ?? slugifyBasic(basename(absRoot) || "project");
   const statePath = projectDbPath(candidateName);
   let row: { name: string; state: string } | undefined;
   if (existsSync(statePath)) {

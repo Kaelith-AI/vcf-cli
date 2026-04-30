@@ -19,7 +19,7 @@
 
 import { readdir, stat, rm, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { kbDraftsDir } from "../project/stateDir.js";
 
 export const CLEANUP_DAYS = 90;
@@ -107,7 +107,7 @@ export async function runKbDraftsCleanup(opts: CleanupOptions = {}): Promise<Cle
  */
 async function draftWasShipped(draftDir: string, liveKbRoot: string): Promise<boolean> {
   if (!existsSync(liveKbRoot)) return false;
-  const draftName = draftDir.split("/").pop() ?? "";
+  const draftName = basename(draftDir);
   // Format: YYYYMMDDTHHMMSS-<slug>-<kind>. Strip the timestamp prefix and
   // the trailing kind to recover the slug.
   const m = /^\d{8}T\d{6}Z?-(.+)-(primer|best-practice|review-stage|reviewer|standard|lens)$/.exec(

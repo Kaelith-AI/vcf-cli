@@ -9,7 +9,7 @@
 // disk under config.workspace.ideas_dir. Adds rows for files that exist
 // but aren't indexed; deletes rows whose file is gone.
 
-import { resolve as resolvePath, join } from "node:path";
+import { resolve as resolvePath, join, basename } from "node:path";
 import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -149,8 +149,7 @@ async function runReindexIdeas(): Promise<void> {
   let added = 0;
   for (const filePath of onDisk) {
     // Derive a slug from the filename: strip dir + .md extension.
-    const fname = filePath.split("/").at(-1) ?? filePath;
-    const slug = fname.replace(/\.md$/, "");
+    const slug = basename(filePath, ".md");
     // Read frontmatter for tags if available; fall back to empty.
     let frontmatterJson = "{}";
     let tags = "[]";

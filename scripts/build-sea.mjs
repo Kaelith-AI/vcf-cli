@@ -61,9 +61,13 @@ function parseArgs(argv) {
 
 function run(cmd, args, opts = {}) {
   console.log(`→ ${cmd} ${args.join(" ")}`);
+  // shell: true is required on Windows so spawnSync can locate
+  // .cmd / .bat shims (npx → npx.cmd, npm → npm.cmd). Without it,
+  // spawnSync returns status=null with errno=ENOENT.
   const res = spawnSync(cmd, args, {
     cwd: REPO_ROOT,
     stdio: "inherit",
+    shell: process.platform === "win32",
     ...opts,
   });
   if (res.status !== 0) {

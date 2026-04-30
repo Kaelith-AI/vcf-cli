@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## Unreleased
 
+## [0.7.1] — 2026-04-30
+
+0.7.0 release polish — fixes for the Windows + SEA failures the 0.7.0 tag
+should have caught before shipping. Same feature set; no behavior changes
+on Linux/macOS beyond the SEA binary now actually running.
+
+### Fixed
+
+- **POSIX-only path handling on Windows.** Several call sites used
+  `path.split("/").pop()` or `string.startsWith(root + "/")` to walk
+  paths, which silently returns wrong values when `path.sep === "\\"`.
+  Replaced with `path.basename` and `path.relative` so the runtime
+  behaves identically on Windows:
+  - `src/cli/reindex.ts` — `vcf reindex --ideas` was inserting the full
+    file path into the `slug` column on Windows instead of the basename.
+  - `src/tools/plan_save.ts` — `--force` backup pre-overwrite was
+    `rename`-ing the existing plan file to a path that joined a Windows
+    absolute path onto another, which silently failed and made the
+    second `plan_save` call return `ok: false`.
+  - `src/cli/project.ts` — `vcf project register` derived the candidate
+    project name from a POSIX split, producing the entire path as the
+    name on Windows.
+  - `src/util/kbDraftsCleanup.ts` — `draftWasShipped` failed to extract
+    the draft slug on Windows, causing the 90-day sweep to take the
+    wrong branch (delete instead of trim, or vice versa).
+  - `src/project/move.ts`, `src/project/relocate.ts` — the local
+    `isInsideAllowedRoots` helper compared with `abs.startsWith(root + "/")`,
+    which never matches on Windows (`root + "\\"`). Replaced with
+    `path.relative` checks mirroring the canonical
+    `assertInsideAllowedRoot` helper.
+- **SEA binary crashed at module load on Linux + macOS.** The bundle
+  evaluated `dirname(fileURLToPath(import.meta.url))` at import time in
+  `src/cli/skills.ts`, but `import.meta.url` is undefined when the
+  bundle runs as a Node SEA. Made the package-root resolution lazy so
+  every other subcommand (`version`, `verify`, `health`, etc.) works
+  from the SEA binary; `install-skills` is the only one that touches
+  the package tree, and it now resolves at call time with a clean
+  fallback if the skills dir isn't co-located with the binary.
+- **SEA binary failed to build on Windows.** `scripts/build-sea.mjs`
+  called `spawnSync("npx", …)` without `shell: true`, so on Windows it
+  couldn't resolve `npx.cmd` and exited with `status: null`. Added
+  `shell: process.platform === "win32"` so `.cmd`/`.bat` shims resolve.
+- **Perf-test afterAll hook timed out on Windows.** Bumped
+  `lesson_search_10k.test.ts` afterAll timeout to 120s so the slower
+  Windows runner has room to tear down a 10k-row SQLite DB + recursive
+  rm of two temp trees.
+
+### Tests
+
+- `test/util/outputs.test.ts` — replaced literal POSIX strings with
+  `path.resolve` / `path.join` so the layout assertions evaluate
+  against whatever the current platform considers absolute.
+- `test/integration/m7.test.ts` — normalized the report path before
+  the regex assertion so the `/custom-reviews/code/` check passes
+  whether `path.sep` is `/` or `\\`.
+
 ## [0.7.0] — 2026-04-30
 
 ### Added

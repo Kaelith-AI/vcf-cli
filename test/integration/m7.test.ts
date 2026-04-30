@@ -374,8 +374,10 @@ describe("M7 review subsystem (project scope)", () => {
     );
     expect(sub.ok).toBe(true);
     const reportPath = (sub.content as { report_path: string }).report_path;
-    expect(reportPath).toMatch(/\/custom-reviews\/code\/stage-1-/);
-    expect(reportPath).not.toMatch(/\/plans\/reviews\//);
+    // Normalize separators so the assertion is platform-agnostic.
+    const reportPathPosix = reportPath.replace(/\\/g, "/");
+    expect(reportPathPosix).toMatch(/\/custom-reviews\/code\/stage-1-/);
+    expect(reportPathPosix).not.toMatch(/\/plans\/reviews\//);
   });
 
   it("review_submit with unknown run_id returns E_NOT_FOUND", async () => {

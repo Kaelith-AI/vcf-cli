@@ -11,7 +11,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { mkdir, writeFile, stat, rename } from "node:fs/promises";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { createHash } from "node:crypto";
 import type { ServerDeps } from "../server.js";
 import { runTool, success } from "../envelope.js";
@@ -111,8 +111,7 @@ export function registerPlanSave(server: McpServer, deps: ServerDeps): void {
               await mkdir(backupDir, { recursive: true });
               for (const [target] of targets) {
                 if (await exists(target)) {
-                  const fname = target.split("/").at(-1)!;
-                  await rename(target, join(backupDir, fname));
+                  await rename(target, join(backupDir, basename(target)));
                 }
               }
             }

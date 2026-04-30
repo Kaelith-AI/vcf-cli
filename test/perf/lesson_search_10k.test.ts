@@ -187,7 +187,7 @@ describe("lesson_search perf @ 10k global rows (#41)", () => {
     }
     await rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
     await rm(projectDir, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
-  });
+  }, 120_000);
 
   async function callLessonSearch(args: Record<string, unknown>): Promise<void> {
     await client.callTool({ name: "lesson_search", arguments: args });

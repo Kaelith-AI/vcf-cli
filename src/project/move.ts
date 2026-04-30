@@ -17,7 +17,7 @@
 
 import { cp, rm, mkdir, readdir, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, resolve as resolvePath } from "node:path";
+import { dirname, isAbsolute, relative, resolve as resolvePath } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openProjectDb } from "../db/project.js";
 import { getProjectByName, getProjectByRoot } from "../util/projectRegistry.js";
@@ -166,7 +166,9 @@ function isInsideAllowedRoots(path: string, roots: readonly string[]): boolean {
   const abs = resolvePath(path);
   return roots.some((r) => {
     const absRoot = resolvePath(r);
-    return abs === absRoot || abs.startsWith(absRoot + "/");
+    if (abs === absRoot) return true;
+    const rel = relative(absRoot, abs);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
   });
 }
 
