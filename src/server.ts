@@ -65,6 +65,7 @@ import { registerReviewTypeCreate } from "./tools/review_type_create.js";
 import { registerReviewTypeApply } from "./tools/review_type_apply.js";
 import { registerResearchCompose } from "./tools/research_compose.js";
 import { registerResearchAssemble } from "./tools/research_assemble.js";
+import { registerSearchWeb } from "./tools/search_web.js";
 import { registerResearchVerify } from "./tools/research_verify.js";
 import { registerResearchResolve } from "./tools/research_resolve.js";
 import { registerProjectMove } from "./tools/project_move.js";
@@ -254,6 +255,11 @@ export function createServer(deps: ServerDeps): McpServer {
   registerPackList(server, deps);
   registerProjectList(server, deps);
   registerPortfolioGraph(server, deps);
+
+  // search_web — only registers when config.searxng is set; no-op otherwise.
+  // Available under both scopes since search is generally useful from any
+  // pipeline (research, review-side fact-check, build-time look-ups).
+  registerSearchWeb(server, deps);
 
   return server;
 }

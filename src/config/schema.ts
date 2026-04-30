@@ -595,6 +595,35 @@ export const EmbeddingsSchema = z
   })
   .strict();
 
+// ---- SearXNG (function-callable search tool) -------------------------------
+//
+// Optional integration with a SearXNG instance (https://docs.searxng.org/).
+// When configured, the `search_web` MCP tool wraps it and lets any
+// LLM-driven flow run searches — primarily for local-model fallback when
+// the model lacks a native web-search tool. Frontier providers should use
+// their built-in tool instead; SearXNG is the equalizer for local routes.
+//
+// Auth: SearXNG instances typically don't require auth, but `auth_env_var`
+// is supported for instances behind a reverse proxy.
+
+export const SearxngSchema = z
+  .object({
+    /** Base URL ending in /search (e.g. http://127.0.0.1:8080/search). */
+    url: z.string().url().max(1024),
+    /** Optional Authorization-header env var (Bearer / Basic). */
+    auth_env_var: z
+      .string()
+      .regex(/^[A-Z_][A-Z0-9_]*$/)
+      .optional(),
+    /** Default per-call timeout. Search is interactive; keep small. */
+    timeout_ms: z.number().int().positive().max(60_000).default(10_000),
+    /** Default result cap. Operators override per-call. */
+    default_limit: z.number().int().positive().max(50).default(10),
+  })
+  .strict();
+
+export type Searxng = z.infer<typeof SearxngSchema>;
+
 // ---- Ship (release-gate knobs) ---------------------------------------------
 //
 // Followup #25 items 5 + 6: strict_chain requires passing ship_audit and
@@ -642,6 +671,14 @@ export const ConfigSchema = z
     // valid; new pipelines (research, KB-review, 27-gate) consume roles via
     // resolveRole(). See RolesSchema for the reserved vocabulary.
     roles: RolesSchema,
+    /**
+     * Optional SearXNG search-tool wiring (Workstream B8). When set, the
+     * `search_web` MCP tool is registered and routes to this instance.
+     * Useful as a function-call search tool for local models or any
+     * pipeline that wants reproducible, configurable search vs. relying
+     * on a model's built-in web tool.
+     */
+    searxng: SearxngSchema.optional(),
     kb: KnowledgeBaseSchema,
     review: ReviewSchema.default({
       categories: ["code", "security", "production"],
