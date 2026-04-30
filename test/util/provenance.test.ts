@@ -73,8 +73,19 @@ describe("requireProvenance", () => {
 
   it("throws when expectedPhase doesn't match", () => {
     expect(() => requireProvenance(valid, { artifact: "x", expectedPhase: "compose" })).toThrow(
-      /phase=.+expected 'compose'/,
+      /phase=.+expected one of \[compose\]/,
     );
+  });
+
+  it("accepts an array of allowed phases", () => {
+    // Singleton match in an array is allowed.
+    expect(() =>
+      requireProvenance(valid, { artifact: "x", expectedPhase: ["compose", "verify"] }),
+    ).not.toThrow();
+    // Mismatch surfaces all allowed phases.
+    expect(() =>
+      requireProvenance(valid, { artifact: "x", expectedPhase: ["compose", "assemble"] }),
+    ).toThrow(/expected one of \[compose, assemble\]/);
   });
 
   it("preserves optional fallback_used", () => {
@@ -199,7 +210,7 @@ describe("readMarkdownProvenance", () => {
     ].join("\n");
     await writeFile(path, content);
     await expect(readMarkdownProvenance(path, { expectedPhase: "compose" })).rejects.toThrow(
-      /expected 'compose'/,
+      /expected one of \[compose\]/,
     );
   });
 });

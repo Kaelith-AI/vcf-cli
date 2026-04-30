@@ -151,8 +151,12 @@ export function registerResearchVerify(server: McpServer, deps: ServerDeps): voi
           // Validator gate: refuse to verify a draft.md without provenance.
           // The whole point of verify is "do I trust this?" — and you can't
           // answer that without knowing which model authored it.
+          // Accept either upstream phase: 'compose' (legacy direct path —
+          // orchestrator wrote draft.md straight from research_compose's
+          // scaffolding mode) or 'assemble' (unified pipeline — draft.md
+          // produced by research_assemble's two-step finisher).
           const draftRead = await readMarkdownProvenance(draftPath, {
-            expectedPhase: "compose",
+            expectedPhase: ["compose", "assemble"],
           });
           const upstreamProvenance = draftRead.provenance;
 

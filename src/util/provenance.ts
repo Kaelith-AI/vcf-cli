@@ -72,7 +72,7 @@ export function buildProvenance(opts: {
  */
 export function requireProvenance(
   value: unknown,
-  context: { artifact: string; expectedPhase?: string },
+  context: { artifact: string; expectedPhase?: string | string[] },
 ): Provenance {
   if (typeof value !== "object" || value === null) {
     throw new McpError(
@@ -96,12 +96,17 @@ export function requireProvenance(
         `Regenerate the upstream artifact with a tool that records provenance.`,
     );
   }
-  if (context.expectedPhase !== undefined && obj["phase"] !== context.expectedPhase) {
-    throw new McpError(
-      "E_VALIDATION",
-      `${context.artifact} has provenance.phase='${obj["phase"]}' but expected '${context.expectedPhase}'. ` +
-        `Wrong upstream artifact?`,
-    );
+  if (context.expectedPhase !== undefined) {
+    const allowed = Array.isArray(context.expectedPhase)
+      ? context.expectedPhase
+      : [context.expectedPhase];
+    if (!allowed.includes(obj["phase"] as string)) {
+      throw new McpError(
+        "E_VALIDATION",
+        `${context.artifact} has provenance.phase='${obj["phase"]}' but expected one of [${allowed.join(", ")}]. ` +
+          `Wrong upstream artifact?`,
+      );
+    }
   }
   const out: Provenance = {
     tool: obj["tool"] as string,
@@ -122,7 +127,7 @@ export function requireProvenance(
  */
 export async function readJsonProvenance(
   filePath: string,
-  context: { expectedPhase?: string },
+  context: { expectedPhase?: string | string[] },
 ): Promise<{ provenance: Provenance; raw: Record<string, unknown> }> {
   let raw: string;
   try {
@@ -142,7 +147,7 @@ export async function readJsonProvenance(
     throw new McpError("E_VALIDATION", `${filePath} top-level value is not an object`);
   }
   const obj = parsed as Record<string, unknown>;
-  const ctx: { artifact: string; expectedPhase?: string } = { artifact: filePath };
+  const ctx: { artifact: string; expectedPhase?: string | string[] } = { artifact: filePath };
   if (context.expectedPhase !== undefined) ctx.expectedPhase = context.expectedPhase;
   const provenance = requireProvenance(obj["provenance"], ctx);
   return { provenance, raw: obj };
@@ -155,7 +160,7 @@ export async function readJsonProvenance(
  */
 export async function readMarkdownProvenance(
   filePath: string,
-  context: { expectedPhase?: string },
+  context: { expectedPhase?: string | string[] },
 ): Promise<{ provenance: Provenance; frontmatter: Record<string, unknown>; body: string }> {
   let raw: string;
   try {
@@ -186,7 +191,7 @@ export async function readMarkdownProvenance(
     throw new McpError("E_VALIDATION", `${filePath} frontmatter is not a YAML object`);
   }
   const fm = frontmatter as Record<string, unknown>;
-  const ctx: { artifact: string; expectedPhase?: string } = { artifact: filePath };
+  const ctx: { artifact: string; expectedPhase?: string | string[] } = { artifact: filePath };
   if (context.expectedPhase !== undefined) ctx.expectedPhase = context.expectedPhase;
   const provenance = requireProvenance(fm["provenance"], ctx);
   // Body starts AFTER the closing fence. `\n---` matched at index `end`;
