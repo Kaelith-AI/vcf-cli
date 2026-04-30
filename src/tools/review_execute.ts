@@ -41,6 +41,7 @@ import { projectRunsDir } from "../project/stateDir.js";
 import { composeMessages, parseSubmission } from "../review/prompt.js";
 import { resolveReviewEndpoint, buildBackupRequest } from "../review/endpointResolve.js";
 import { buildProvenance } from "../util/provenance.js";
+import { PanelModeSchema } from "../util/panel.js";
 
 const ReviewExecuteInput = z
   .object({
@@ -61,6 +62,21 @@ const ReviewExecuteInput = z
       .boolean()
       .default(false)
       .describe("opt in to review_execute against trust_level='public' endpoints"),
+    /**
+     * mode=execute (default): MCP calls the configured review endpoint via
+     *   the HTTP path. The reviewer sees a scoped git diff baked into the
+     *   prompt at review_prepare time — fast, but limits visibility to the
+     *   filtered diff payload.
+     *
+     * mode=directive: MCP returns the stage rubric + carry-forward +
+     *   project_root + lessons + reviewer overlay and stops there. The
+     *   orchestrator (Claude Code, etc.) runs the reviewer with its own
+     *   Read tool, which can crawl the project tree directly — closes the
+     *   Phase H architectural issue where reviewers were constrained to a
+     *   pre-computed scoped diff. The orchestrator calls review_submit
+     *   when done.
+     */
+    mode: PanelModeSchema,
     expand: z.boolean().default(true),
   })
   .strict();
@@ -143,6 +159,58 @@ export function registerReviewExecute(server: McpServer, deps: ServerDeps): void
           });
 
           const messages = await composeMessages(runDir, run, overlay);
+
+          // mode=directive: return the stage rubric + carry-forward + project
+          // root and stop. Orchestrator runs the reviewer with full Read
+          // access to the project tree (Phase H fix — reviewer no longer
+          // constrained to the pre-computed scoped diff). Orchestrator must
+          // then call review_submit with the verdict.
+          if (parsed.mode === "directive") {
+            auditInputs = {
+              run_id: parsed.run_id,
+              mode: "directive",
+              endpoint_intent: endpoint.name,
+              model_intent: modelId,
+            };
+            auditOutputs = {
+              ok: true,
+              mode: "directive",
+              run_id: run.id,
+              run_dir: runDir,
+              project_root: root,
+            };
+            return success<Record<string, unknown>>(
+              [runDir],
+              `review_execute: directive emitted for ${run.id} (${run.type} stage ${run.stage}) — orchestrator runs reviewer with project Read access, then calls review_submit`,
+              parsed.expand
+                ? {
+                    content: {
+                      mode: "directive",
+                      run_id: run.id,
+                      run_dir: runDir,
+                      project_root: root,
+                      review_type: run.type,
+                      stage: run.stage,
+                      messages,
+                      next_tool: "review_submit",
+                      next_tool_args: {
+                        run_id: run.id,
+                      },
+                      instructions:
+                        "Run a reviewer agent with FULL Read access to the project tree at project_root. " +
+                        "The stage rubric is in the system prompt; the carry-forward, decision/response " +
+                        "log snapshots, and reviewer overlay live under run_dir. Read whatever code paths " +
+                        "the rubric calls for — do NOT rely solely on the scoped diff (which is a " +
+                        "pre-computed convenience, not the source of truth). When done, parse the " +
+                        "reviewer's verdict and call review_submit with run_id + the verdict payload. " +
+                        "If you find an issue, double-check it against current code BEFORE reporting " +
+                        "it as a finding — the rubric or carry-forward may name code that has since changed.",
+                    },
+                  }
+                : {},
+            );
+          }
+
           // Always redact outgoing content — secrets should not leave the box
           // even to a local endpoint the operator might later aim elsewhere.
           const redactedMessages = redact(messages) as ChatMessage[];
