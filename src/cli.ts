@@ -37,6 +37,7 @@ import { runEmbedKb } from "./cli/embed.js";
 import { runAdminAudit, runAdminConfigHistory } from "./cli/admin.js";
 import { runBackup, runRestore } from "./cli/backup.js";
 import { runMigrate03 } from "./cli/migrate.js";
+import { runConfigUpgrade } from "./cli/configUpgrade.js";
 import { runTestTrends } from "./cli/testTrends.js";
 
 // Backward-compat re-exports. `test/update-primers.test.ts` and
@@ -153,6 +154,26 @@ program
   .action(async (opts: { format?: string }) => {
     try {
       await runStaleCheck(opts);
+    } catch (e) {
+      err((e as Error).message);
+    }
+  });
+
+const config = program.command("config").description("Maintenance helpers for ~/.vcf/config.yaml.");
+
+config
+  .command("upgrade")
+  .description(
+    "Add 0.7-shape role fields (endpoint.kind, model_alias.vendor/tags, roles scaffold) " +
+      "to an existing config.yaml. Idempotent — re-run safe. The schema is purely additive, " +
+      "so this command is opt-in: legacy configs continue to validate untouched.",
+  )
+  .option("--config <path>", "path to config.yaml (default: $VCF_CONFIG or ~/.vcf/config.yaml)")
+  .option("--dry-run", "print the upgraded YAML to stdout without writing anything")
+  .option("--apply", "overwrite config.yaml in place (after backing up to .bak-<ts>)")
+  .action(async (opts: { config?: string; dryRun?: boolean; apply?: boolean }) => {
+    try {
+      await runConfigUpgrade(opts);
     } catch (e) {
       err((e as Error).message);
     }
