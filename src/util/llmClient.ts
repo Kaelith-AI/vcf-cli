@@ -83,8 +83,14 @@ export async function callChatCompletion(req: ChatCompletionRequest): Promise<st
   const body: Record<string, unknown> = {
     model: req.model,
     messages: req.messages,
-    temperature: req.temperature ?? 0.1,
   };
+  // Temperature is opt-in. Some providers (CLIProxyAPI-routed harnesses
+  // via LiteLLM) reject the field outright; previous default-of-0.1
+  // broke every CLIProxyAPI request. Callers that need determinism set
+  // it explicitly; otherwise the model's own default applies.
+  if (req.temperature !== undefined) {
+    body.temperature = req.temperature;
+  }
   if (req.jsonResponse) {
     body.response_format = { type: "json_object" };
   }

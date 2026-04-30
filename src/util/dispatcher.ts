@@ -52,6 +52,14 @@ export interface DispatchResult {
 }
 
 /**
+ * Model-id prefixes the dispatcher must NOT send `temperature` for. These
+ * routes proxy to harness backends (Anthropic CLI, OpenAI agents tooling,
+ * Gemini CLI) that reject the field. Add new prefixes here when LiteLLM
+ * gains another harness route.
+ */
+const MODEL_PREFIXES_NO_TEMPERATURE: readonly string[] = ["CLIProxyAPI/"];
+
+/**
  * Single-shot dispatch. Throws McpError on:
  *   - E_VALIDATION when endpoint.kind is set but its required fields are missing
  *   - E_ENDPOINT_UNREACHABLE on api transport / cli spawn failures
@@ -68,12 +76,22 @@ export async function dispatchChatCompletion(req: DispatchRequest): Promise<Disp
       throw new McpError("E_VALIDATION", `api endpoint '${req.endpoint.name}' is missing base_url`);
     }
     try {
+      // CLIProxyAPI-routed models go through harness backends that reject
+      // `temperature` at the LiteLLM layer (HTTP 400 — "temperature is
+      // deprecated for this model"). Strip it before the call regardless
+      // of what the caller asked for. Same proxy serves OpenRouter/
+      // ollama/ which DO accept temperature, so the strip is per-model
+      // not per-endpoint.
+      const stripsTemperature = MODEL_PREFIXES_NO_TEMPERATURE.some((p) =>
+        req.modelId.startsWith(p),
+      );
+      const effectiveTemperature = stripsTemperature ? undefined : req.temperature;
       const apiReq = {
         baseUrl: req.endpoint.base_url,
         apiKey: req.apiKey,
         model: req.modelId,
         messages: req.messages,
-        ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+        ...(effectiveTemperature !== undefined ? { temperature: effectiveTemperature } : {}),
         ...(req.signal !== undefined ? { signal: req.signal } : {}),
         ...(req.jsonResponse !== undefined ? { jsonResponse: req.jsonResponse } : {}),
         ...(req.providerOptions !== undefined ? { providerOptions: req.providerOptions } : {}),
