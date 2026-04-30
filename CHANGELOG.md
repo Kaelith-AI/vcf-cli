@@ -61,6 +61,16 @@ on Linux/macOS beyond the SEA binary now actually running.
 - `test/integration/m7.test.ts` — normalized the report path before
   the regex assertion so the `/custom-reviews/code/` check passes
   whether `path.sep` is `/` or `\\`.
+- `test/util/secretsEnv.test.ts` — the two POSIX permission-mode
+  assertions now skip on Windows. `chmod 0o600` on Windows reports
+  `0o666` for any writable file, and the permissive-detection guard
+  is unix-only by design.
+- `test/perf/lesson_search_10k.test.ts` — entire suite skipped on
+  Windows. It's a latency test (p95 < 100ms across 50 calls); the
+  GitHub Windows runner is ~5× slower for SQLite + recursive fs
+  ops, so the numbers aren't comparable and even the teardown
+  exceeded the afterAll budget. `lesson_search` itself is exercised
+  by smaller integration tests that do run on Windows.
 
 ## [0.7.0] — 2026-04-30
 

@@ -75,7 +75,14 @@ async function ingestLessons(
   db.exec("COMMIT");
 }
 
-describe("lesson_search perf @ 10k global rows (#41)", () => {
+// Skipped on Windows: this is a latency test (p95 < 100ms over 50 calls)
+// and the Windows runner is roughly 5× slower for SQLite + recursive
+// fs operations than Linux/macOS. The 10k-row ingest + teardown alone
+// exceeded the 120s afterAll budget on the GitHub Windows runner. The
+// test exists to catch perf regressions on the platforms we benchmark
+// for, not to validate Windows behavior — the lesson_search tool
+// itself is covered by smaller integration tests that do run on Windows.
+describe.skipIf(process.platform === "win32")("lesson_search perf @ 10k global rows (#41)", () => {
   let home: string;
   let projectDir: string;
   let projectDb: DatabaseSync;

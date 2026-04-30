@@ -125,21 +125,32 @@ describe("loadSecretsEnv", () => {
     expect(r.invalid).toEqual(["1BAD"]);
   });
 
-  it("reports permissive=true on world/group readable file", async () => {
-    await writeFile(envPath, "VCF_SECRETS_TEST_FOO=v\n");
-    await chmod(envPath, 0o644);
-    const r = loadSecretsEnv(envPath);
-    expect(r.permissive).toBe(true);
-    expect(r.mode).toBe("0644");
-  });
+  // POSIX chmod-mode semantics — Windows reports a flat 0o666 for any
+  // writable file regardless of the mode requested, so these checks are
+  // meaningless there. The permissive-detection codepath itself is
+  // unix-only by design (it's a "warn the user their .env is world-
+  // readable" guard).
+  it.skipIf(process.platform === "win32")(
+    "reports permissive=true on world/group readable file",
+    async () => {
+      await writeFile(envPath, "VCF_SECRETS_TEST_FOO=v\n");
+      await chmod(envPath, 0o644);
+      const r = loadSecretsEnv(envPath);
+      expect(r.permissive).toBe(true);
+      expect(r.mode).toBe("0644");
+    },
+  );
 
-  it("reports permissive=false on chmod 600", async () => {
-    await writeFile(envPath, "VCF_SECRETS_TEST_FOO=v\n");
-    await chmod(envPath, 0o600);
-    const r = loadSecretsEnv(envPath);
-    expect(r.permissive).toBe(false);
-    expect(r.mode).toBe("0600");
-  });
+  it.skipIf(process.platform === "win32")(
+    "reports permissive=false on chmod 600",
+    async () => {
+      await writeFile(envPath, "VCF_SECRETS_TEST_FOO=v\n");
+      await chmod(envPath, 0o600);
+      const r = loadSecretsEnv(envPath);
+      expect(r.permissive).toBe(false);
+      expect(r.mode).toBe("0600");
+    },
+  );
 
   it("never logs or returns secret values, only names", async () => {
     await writeFile(envPath, "VCF_SECRETS_TEST_FOO=super-secret-value-do-not-leak\n");
